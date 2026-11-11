@@ -108,7 +108,10 @@ impl Docker {
             }
         }
 
-        if self.inspect(&expected_name, "{{.State.Running}}").await?.as_deref()
+        if self
+            .inspect(&expected_name, "{{.State.Running}}")
+            .await?
+            .as_deref()
             != Some("true")
         {
             return Err(AgentError::Runtime(
@@ -228,13 +231,13 @@ impl Docker {
             ));
         }
 
-        let stderr = normalized(&output.stderr);
-        if stderr.contains("no such object") || stderr.contains("no such container") {
+        let detail = normalized(&output.stderr);
+        if is_missing_container_error(&detail) {
             return Ok(None);
         }
         Err(AgentError::Runtime(format!(
             "docker inspect failed: {}",
-            truncate(&stderr)
+            truncate(&detail)
         )))
     }
 
@@ -245,9 +248,8 @@ impl Docker {
             .ok_or_else(|| {
                 AgentError::Runtime("container disappeared while verifying ownership".into())
             })?;
-        let labels: BTreeMap<String, String> = serde_json::from_str(&raw).map_err(|_| {
-            AgentError::Runtime("docker returned invalid container labels".into())
-        })?;
+        let labels: BTreeMap<String, String> = serde_json::from_str(&raw)
+            .map_err(|_| AgentError::Runtime("docker returned invalid container labels".into()))?;
 
         if labels.get("craftpilot.managed").map(String::as_str) != Some("1")
             || labels.get("craftpilot.server_id").map(String::as_str) != Some(server_id)
@@ -484,7 +486,9 @@ pub fn server_id(payload: &Value) -> Result<String> {
         .and_then(Value::as_str)
         .ok_or_else(|| AgentError::Runtime("command has an invalid server id".into()))?;
     if !is_uuid(value) {
-        return Err(AgentError::Runtime("command has an invalid server id".into()));
+        return Err(AgentError::Runtime(
+            "command has an invalid server id".into(),
+        ));
     }
     Ok(value.to_string())
 }
@@ -520,6 +524,15 @@ fn required_u64(map: &serde_json::Map<String, Value>, key: &str) -> Result<u64> 
     map.get(key)
         .and_then(Value::as_u64)
         .ok_or_else(|| AgentError::Runtime(format!("container specification is missing {key}")))
+}
+
+/// Docker Desktop svarar `Error: No such object: <namn>` — med versaler —
+/// medan daemonen på Linux kan svara `No such container`. Båda betyder
+/// "containern finns inte ännu" och ska leda till `docker run`, inte till
+/// ett RUNTIME_ERROR.
+fn is_missing_container_error(stderr: &str) -> bool {
+    let lowered = stderr.to_ascii_lowercase();
+    lowered.contains("no such object") || lowered.contains("no such container")
 }
 
 fn normalized(bytes: &[u8]) -> String {
@@ -582,6 +595,19 @@ mod tests {
             vec!["eclipse-temurin:21-jre".to_string()],
             30,
         )
+    }
+
+    #[test]
+    fn recognizes_docker_desktop_missing_container_errors() {
+        assert!(is_missing_container_error(
+            "Error: No such object: craftpilot-4f2b2d3a"
+        ));
+        assert!(is_missing_container_error(
+            "Error response from daemon: No such container: craftpilot-4f2b2d3a"
+        ));
+        assert!(!is_missing_container_error(
+            "Error response from daemon: permission denied"
+        ));
     }
 
     #[test]
