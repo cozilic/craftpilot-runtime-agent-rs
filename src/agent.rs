@@ -261,6 +261,15 @@ impl Agent {
         let sequence = self.store.next_sequence()?;
         let claim = self.api.claim(&node_id, sequence).await?;
 
+        // Telemetrin hör inte till kommandokön: den måste skickas även när
+        // claim är tomt, annars stannar panelens status så snart inget körs.
+        let report_due = self
+            .last_report
+            .is_none_or(|at| at.elapsed() >= Duration::from_secs(30));
+        if report_due {
+            self.report_servers().await;
+        }
+
         let Some(command) = claim.command else {
             return Ok(());
         };
@@ -277,11 +286,7 @@ impl Agent {
             command.command_type.as_str(),
             "start" | "stop" | "migration_stop"
         );
-        if urgent
-            || self
-                .last_report
-                .is_none_or(|at| at.elapsed() >= Duration::from_secs(30))
-        {
+        if urgent && !report_due {
             self.report_servers().await;
         }
         match result {
