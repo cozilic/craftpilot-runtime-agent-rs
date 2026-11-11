@@ -5,10 +5,10 @@ built as a side project. The agent connects a trusted host to a CraftPilot maste
 Minecraft containers through the host's Docker daemon, and speaks the **same HTTP contract** as
 the Python agent — no master changes are required to run it side by side.
 
-> **Status: phase 6.** Enrollment, heartbeat, command claiming, acknowledgement, START, STOP, the
-> one-time initial SNAPSHOT, console commands, the file manager and encrypted runtime-node
-> migrations work. File downloads are still acknowledged as `RUNTIME_ERROR`, so the panel shows a
-> failure instead of a silent lease.
+> **Status: phase 7.** Enrollment, heartbeat, command claiming, acknowledgement, START, STOP, the
+> one-time initial SNAPSHOT, console commands, the file manager, encrypted runtime-node migrations
+> and server telemetry work. `file_download` is still acknowledged as `RUNTIME_ERROR`, so the
+> panel shows a failure instead of a silent lease.
 
 ## Implemented
 
@@ -29,6 +29,13 @@ the Python agent — no master changes are required to run it side by side.
 - **STOP** with the `force` flag: graceful `docker stop --time <grace>` otherwise
   `docker kill --signal=KILL`, answering `STOPPED` / `ALREADY_STOPPED`; a container that loses its
   labels is never touched.
+- **TELEMETRY** (`servers` + `servers/report`): every 30 s, and immediately after a start/stop,
+  the agent reports its assigned servers: status from `docker inspect` (missing → `OFFLINE`,
+  running → `ONLINE`, exited 0 → `OFFLINE`, non-zero → `CRASHED`), CPU/memory from
+  `docker stats --no-stream`, `players_max` from `server.properties` (`max-players`, default 20),
+  `players_online` from join/leave console lines, and new console lines from
+  `docker logs --timestamps` with an in-memory cursor (the first report sends a 400-line backlog).
+  Each report consumes a new sequence number, so the master never sees it as a replay.
 - **MIGRATIONS** (`migration_prepare`, `migration_stop`, `migration_export`, `migration_import`,
   `migration_commit`, `migration_delete_source`): the destination creates an X25519 keypair and
   keeps the private half in the agent state volume (`0600`); the source archives the server root,
@@ -69,11 +76,10 @@ the Python agent — no master changes are required to run it side by side.
 ## Not implemented yet
 
 File downloads (`file_download`, which streams a file back to the master).
-  Telemetry/`servers/report` is not sent
-  either, so a node running this agent appears online but reports no server data — the master
-  therefore keeps a started server at `STARTING` until something else reports it. STOP sends
-  SIGTERM to the JVM rather than Minecraft's own `stop` command over RCON; a server that needs an
-  explicit save-on-stop gets the JVM shutdown hook only.
+  Server disk usage (`disk_used_mb`) and artifact presence (`artifact_present`) are not reported
+  yet, and the log cursor is in-memory, so an agent restart re-sends one backlog window. STOP
+  sends SIGTERM to the JVM rather than Minecraft's own `stop` command over RCON; a server that
+  needs an explicit save-on-stop gets the JVM shutdown hook only.
 
 ## Configuration
 

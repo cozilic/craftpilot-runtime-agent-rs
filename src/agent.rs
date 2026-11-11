@@ -1,5 +1,6 @@
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
+use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use tokio::time::sleep;
 use tracing::{info, warn};
@@ -13,6 +14,7 @@ use crate::migrations::Migrations;
 use crate::model::{AckRequest, Command};
 use crate::snapshot::Snapshotter;
 use crate::state::StateStore;
+use crate::telemetry::Reporter;
 
 /// Etapp 1 av Rust-agenten: enrollment, heartbeat, claim och ack.
 ///
@@ -28,6 +30,8 @@ pub struct Agent {
     snapshot: Snapshotter,
     files: Files,
     migrations: Migrations,
+    reporter: Reporter,
+    last_report: Option<Instant>,
 }
 
 impl Agent {
@@ -64,6 +68,8 @@ impl Agent {
             snapshot,
             files,
             migrations,
+            reporter: Reporter::new(),
+            last_report: None,
         })
     }
 
@@ -266,7 +272,19 @@ impl Agent {
         );
 
         let ack = self.execute(&command).await;
-        match self.api.acknowledge(&node_id, &command.id, &ack).await {
+        let result = self.api.acknowledge(&node_id, &command.id, &ack).await;
+        let urgent = matches!(
+            command.command_type.as_str(),
+            "start" | "stop" | "migration_stop"
+        );
+        if urgent
+            || self
+                .last_report
+                .is_none_or(|at| at.elapsed() >= Duration::from_secs(30))
+        {
+            self.report_servers().await;
+        }
+        match result {
             Ok(_) => Ok(()),
             Err(AgentError::Conflict(body)) => {
                 warn!(command_id = %command.id, error = %body, "lease expired before the acknowledge");
@@ -521,6 +539,89 @@ impl Agent {
                 failure(command, &ack_message(&err))
             }
         }
+    }
+
+    /// Rapporterar status, containerdata, spelare och nya konsolrader för
+    /// varje server som mastern tilldelat noden. Varje rapport konsumerar
+    /// ett nytt sekvensnummer (samma räknare som heartbeat/claim), annars
+    /// avvisar mastern den som replay.
+    async fn report_servers(&mut self) {
+        let Some(node_id) = self.store.state().node_id.clone() else {
+            return;
+        };
+        let listing = match self.api.servers(&node_id).await {
+            Ok(listing) => listing,
+            Err(err) => {
+                warn!(error = %err, "fetching the assigned servers failed");
+                return;
+            }
+        };
+        let Some(servers) = listing.get("servers").and_then(Value::as_array) else {
+            return;
+        };
+
+        for id in servers.iter().filter_map(Value::as_str) {
+            let sample = match self
+                .reporter
+                .sample(&self.docker, &self.cfg.server_data_root, id)
+                .await
+            {
+                Ok(sample) => sample,
+                Err(err) => {
+                    warn!(server_id = %id, error = %err, "sampling server telemetry failed");
+                    continue;
+                }
+            };
+            let sequence = match self.store.next_sequence() {
+                Ok(sequence) => sequence,
+                Err(err) => {
+                    warn!(error = %err, "advancing the report sequence failed");
+                    return;
+                }
+            };
+
+            let mut report = serde_json::Map::new();
+            report.insert("sequence".into(), json!(sequence));
+            report.insert("server_id".into(), json!(id));
+            report.insert("status".into(), json!(sample.status));
+            if let Some(value) = sample.cpu_percent {
+                report.insert("cpu_percent".into(), json!(value));
+            }
+            if let Some(value) = sample.memory_used_mb {
+                report.insert("memory_used_mb".into(), json!(value));
+            }
+            if let Some(value) = sample.memory_limit_mb {
+                report.insert("memory_limit_mb".into(), json!(value));
+            }
+            if let Some(value) = sample.players_online {
+                report.insert("players_online".into(), json!(value));
+            }
+            if let Some(value) = sample.players_max {
+                report.insert("players_max".into(), json!(value));
+            }
+            if !sample.logs.is_empty() {
+                let logs: Vec<Value> = sample
+                    .logs
+                    .iter()
+                    .map(|(ts, text)| json!({ "ts": ts, "text": text }))
+                    .collect();
+                report.insert("logs".into(), Value::Array(logs));
+            }
+
+            match self
+                .api
+                .report_server(&node_id, &Value::Object(report))
+                .await
+            {
+                Ok(_) => {}
+                Err(AgentError::Conflict(body)) => {
+                    warn!(server_id = %id, error = %body, "the report was rejected as a replay");
+                }
+                Err(err) => warn!(server_id = %id, error = %err, "reporting the server failed"),
+            }
+        }
+
+        self.last_report = Some(Instant::now());
     }
 
     fn forget_credential(&mut self) -> Result<()> {

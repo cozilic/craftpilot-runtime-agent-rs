@@ -199,6 +199,28 @@ impl MasterClient {
         Ok(response)
     }
 
+    /// Servrarna som är tilldelade den här noden (`servers` + `artifacts`).
+    pub async fn servers(&self, node_id: &str) -> Result<Value> {
+        self.request(
+            Method::GET,
+            &format!("api/runtime/nodes/{node_id}/servers"),
+            None::<&Value>,
+            true,
+        )
+        .await
+    }
+
+    /// En statusrapport per server; `sequence` måste vara strikt ökande.
+    pub async fn report_server(&self, node_id: &str, report: &Value) -> Result<Value> {
+        self.request(
+            Method::POST,
+            &format!("api/runtime/nodes/{node_id}/servers/report"),
+            Some(report),
+            true,
+        )
+        .await
+    }
+
     /// File results are delivered before the ack: the master's ack checks
     /// `result_data`, which this endpoint stores.
     pub async fn store_result(

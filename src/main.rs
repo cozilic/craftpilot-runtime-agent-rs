@@ -8,6 +8,7 @@ mod migrations;
 mod model;
 mod snapshot;
 mod state;
+mod telemetry;
 
 use tracing::error;
 use tracing_subscriber::EnvFilter;
