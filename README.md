@@ -5,8 +5,8 @@ built as a side project. The agent connects a trusted host to a CraftPilot maste
 Minecraft containers through the host's Docker daemon, and speaks the **same HTTP contract** as
 the Python agent — no master changes are required to run it side by side.
 
-> **Status: phase 3.** Enrollment, heartbeat, command claiming, acknowledgement, START, STOP and
-> the one-time initial SNAPSHOT work. Console, file operations and migrations are still
+> **Status: phase 4.** Enrollment, heartbeat, command claiming, acknowledgement, START, STOP, the
+> one-time initial SNAPSHOT and console commands work. File operations and migrations are still
 > acknowledged as `RUNTIME_ERROR`, so the panel shows a failure instead of a silent lease.
 
 ## Implemented
@@ -28,6 +28,12 @@ the Python agent — no master changes are required to run it side by side.
 - **STOP** with the `force` flag: graceful `docker stop --time <grace>` otherwise
   `docker kill --signal=KILL`, answering `STOPPED` / `ALREADY_STOPPED`; a container that loses its
   labels is never touched.
+- **CONSOLE**: writes one attributed line to the game's console FIFO with the same argv shape as
+  the master's own Docker adapter (`docker exec <name> sh -c 'printf … > /tmp/.craftpilot-console'
+  sh <command>`), so the command is never interpolated into a shell script. Requires the container
+  to exist, carry this server's labels and be running; the line is trimmed, must be non-empty,
+  free of control characters and at most 1000 characters. Answers `CONSOLE_EXECUTED` with
+  `sha256(payload.command)`, the digest the master verifies. Console text is never logged.
 - **Initial SNAPSHOT** (the one-time master→node copy that makes a remote server startable):
   downloads the bounded archive from this node's command URL with its bearer credential,
   rejects any other origin, host, path, query or redirect, enforces the declared byte count and
@@ -41,8 +47,9 @@ the Python agent — no master changes are required to run it side by side.
 
 ## Not implemented yet
 
-`console`, file operations and migrations. Telemetry/`servers/report` is not sent
-  either, so a node running this agent appears online but reports no server data. STOP sends
+File operations and migrations. Telemetry/`servers/report` is not sent
+  either, so a node running this agent appears online but reports no server data — the master
+  therefore keeps a started server at `STARTING` until something else reports it. STOP sends
   SIGTERM to the JVM rather than Minecraft's own `stop` command over RCON; a server that needs an
   explicit save-on-stop gets the JVM shutdown hook only.
 

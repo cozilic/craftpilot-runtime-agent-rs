@@ -1,5 +1,6 @@
 use std::time::Duration;
 
+use sha2::{Digest, Sha256};
 use tokio::time::sleep;
 use tracing::{info, warn};
 
@@ -285,6 +286,23 @@ impl Agent {
                     )
                 }
             },
+            "console" => match self.docker.console(&command.payload).await {
+                Ok(raw) => (
+                    true,
+                    "CONSOLE_EXECUTED".to_string(),
+                    Some(sha256_hex(&raw)),
+                    None,
+                ),
+                Err(err) => {
+                    warn!(command_id = %command.id, error = %err, "console failed");
+                    (
+                        false,
+                        "RUNTIME_ERROR".to_string(),
+                        Some(ack_message(&err)),
+                        None,
+                    )
+                }
+            },
             "snapshot" => {
                 let node_id = self.store.state().node_id.clone();
                 match node_id {
@@ -374,4 +392,29 @@ impl Agent {
 /// Docker-fel ska trunkeras, inte göra acken ogiltig.
 fn ack_message(error: &AgentError) -> String {
     error.to_string().chars().take(300).collect()
+}
+
+/// Mastern verifierar `sha256(payload.command)` i console-acken.
+fn sha256_hex(value: &str) -> String {
+    Sha256::digest(value.as_bytes())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sha256_hex;
+
+    #[test]
+    fn console_ack_digest_matches_the_master_contract() {
+        assert_eq!(
+            sha256_hex(""),
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+        let digest = sha256_hex("say hello");
+        assert_eq!(digest.len(), 64);
+        assert!(digest.chars().all(|ch| ch.is_ascii_hexdigit()));
+        assert_ne!(digest, sha256_hex("say hello "));
+    }
 }

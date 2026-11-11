@@ -13,6 +13,9 @@ use crate::error::{AgentError, Result};
 const CONTAINER_PREFIX: &str = "craftpilot-";
 const MOUNT_PORT: u16 = 25565;
 const MAX_CAPTURED_ERROR: usize = 220;
+/// Samma konsol-FIFO som masterns `RuntimeSpec::CONSOLE_FILE`. Spelet äger
+/// läsänden (`0<>` i startkommandot), agenten skriver en rad per kommando.
+const CONSOLE_FILE: &str = "/tmp/.craftpilot-console";
 
 /// Kör enbart fasta Docker-kommandon med argv — aldrig ett shell.
 /// Motsvarar Python-agentens `DockerRuntime` för START/STOP.
@@ -181,6 +184,38 @@ impl Docker {
         Ok(StopOutcome {
             already_stopped: false,
         })
+    }
+
+    /// Skriver en rad till spelets konsol-FIFO — samma argv-form som masterns
+    /// egen Docker-adapter: kommandot går som `$1`, aldrig interpolerat i
+    /// skriptet. Containern måste vara vår och faktiskt köra.
+    ///
+    /// Returnerar den **exakta** payload-strängen, eftersom mastern verifierar
+    /// `sha256(payload.command)` i acken; endast det som skrivs trimmas.
+    pub async fn console(&self, payload: &Value) -> Result<String> {
+        let server_id = server_id(payload)?;
+        let raw = payload
+            .get("command")
+            .and_then(Value::as_str)
+            .ok_or_else(|| AgentError::Runtime("console command is missing".into()))?;
+        let command = console_line(raw)?;
+        let name = container_name(&server_id);
+
+        let Some(running) = self.inspect(&name, "{{.State.Running}}").await? else {
+            return Err(AgentError::Runtime(
+                "the server container is missing".into(),
+            ));
+        };
+        self.verify_managed(&server_id, &name).await?;
+        if running != "true" {
+            return Err(AgentError::Runtime("the server is not running".into()));
+        }
+
+        let script = format!("printf \"%s\\n\" \"$1\" > {CONSOLE_FILE}");
+        self.run(&["exec", &name, "sh", "-c", &script, "sh", &command], 15)
+            .await?;
+        info!(server_id = %server_id, "server_console_command_written");
+        Ok(raw.to_string())
     }
 
     /// Fast argv i samma form som Python-agenten använder.
@@ -493,6 +528,18 @@ pub fn server_id(payload: &Value) -> Result<String> {
     Ok(value.to_string())
 }
 
+/// Masterns `DockerRuntimeAdapter::execute` trimmar raden och accepterar
+/// högst 1000 tecken utan kontrolltecken. Samma regel här, så att agenten
+/// aldrig skriver något panelen inte skulle ha skickat.
+fn console_line(raw: &str) -> Result<String> {
+    let command = raw.trim();
+    if command.is_empty() || command.chars().count() > 1000 || command.chars().any(char::is_control)
+    {
+        return Err(AgentError::Runtime("console command is invalid".into()));
+    }
+    Ok(command.to_string())
+}
+
 pub fn is_uuid(value: &str) -> bool {
     value.len() == 36
         && value.char_indices().all(|(index, ch)| match index {
@@ -671,6 +718,24 @@ mod tests {
         let mut value = payload();
         value["container"]["memory_mb"] = json!(16);
         assert!(ContainerSpec::parse(&value, "craftpilot-096d46aa").is_err());
+    }
+
+    #[test]
+    fn console_accepts_a_trimmed_single_line() {
+        assert_eq!(console_line("  say hello  ").unwrap(), "say hello");
+        assert_eq!(
+            console_line("tellraw @a \"hej\"").unwrap(),
+            "tellraw @a \"hej\""
+        );
+    }
+
+    #[test]
+    fn console_rejects_empty_control_and_oversized_input() {
+        assert!(console_line("   ").is_err());
+        assert!(console_line("say\u{0}hi").is_err());
+        assert!(console_line("say\nhello").is_err());
+        assert!(console_line(&"a".repeat(1001)).is_err());
+        assert!(console_line(&"a".repeat(1000)).is_ok());
     }
 
     #[test]
