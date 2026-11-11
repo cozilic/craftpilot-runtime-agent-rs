@@ -224,7 +224,7 @@ impl Migrations {
             .read_key(&ids.migration_id)?
             .ok_or_else(|| invalid("the migration receiver key is missing"))?;
 
-        let manifest = api
+        let response = api
             .get_migration_manifest(
                 node_id,
                 &ids.migration_id,
@@ -232,7 +232,9 @@ impl Migrations {
                 &command.lease_token,
             )
             .await?;
-        let manifest = Manifest::parse(&manifest, payload)?;
+        // Mastern svarar `{ "manifest": { ... } }`.
+        let manifest = response.get("manifest").unwrap_or(&response);
+        let manifest = Manifest::parse(manifest, payload)?;
 
         let shared = x25519(secret, manifest.source_public_key);
         let key = derive_key(
