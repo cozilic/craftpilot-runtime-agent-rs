@@ -31,6 +31,10 @@ pub struct Config {
     /// GID som spelcontainerns filer delas med (33 = Minecraft i panelens
     /// images). Används när en snapshot installeras.
     pub data_gid: u32,
+    /// Samma gräns som masterns `server.files.max_edit_bytes`.
+    pub max_edit_bytes: u64,
+    /// Samma gräns som masterns `server.files.max_upload_bytes`.
+    pub max_upload_bytes: u64,
 }
 
 impl Config {
@@ -87,6 +91,8 @@ impl Config {
             docker_data_root: optional_env("CRAFTPILOT_DOCKER_SERVER_DATA_ROOT")
                 .map(|root| root.trim_end_matches(['/', '\\']).to_string()),
             data_gid: parse_u32("CRAFTPILOT_DATA_GID", 33)?,
+            max_edit_bytes: parse_u64("CRAFTPILOT_MAX_EDIT_BYTES", 4 * 1024 * 1024)?,
+            max_upload_bytes: parse_u64("CRAFTPILOT_MAX_UPLOAD_BYTES", 2 * 1024 * 1024 * 1024)?,
         })
     }
 }

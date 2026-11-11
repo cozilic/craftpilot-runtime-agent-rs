@@ -199,6 +199,56 @@ impl MasterClient {
         Ok(response)
     }
 
+    /// File results are delivered before the ack: the master's ack checks
+    /// `result_data`, which this endpoint stores.
+    pub async fn store_result(
+        &self,
+        node_id: &str,
+        command_id: &str,
+        lease_token: &str,
+        result: &Value,
+    ) -> Result<Value> {
+        let body = serde_json::json!({ "lease_token": lease_token, "result": result });
+        self.request(
+            Method::POST,
+            &format!("api/runtime/nodes/{node_id}/commands/{command_id}/result"),
+            Some(&body),
+            true,
+        )
+        .await
+    }
+
+    /// Hämtar en uppladdning som mastern redan verifierat. Leasen går i
+    /// `X-Result-Lease`, inte i URL:en.
+    pub async fn fetch_upload(
+        &self,
+        node_id: &str,
+        command_id: &str,
+        lease_token: &str,
+    ) -> Result<reqwest::Response> {
+        let credential = self.credential.as_deref().ok_or(AgentError::Unauthorized)?;
+        let response = self
+            .http
+            .get(self.url(&format!(
+                "api/runtime/nodes/{node_id}/commands/{command_id}/upload"
+            ))?)
+            .header("X-Result-Lease", lease_token)
+            .bearer_auth(credential)
+            .send()
+            .await?;
+        let status = response.status();
+        if status == StatusCode::UNAUTHORIZED {
+            return Err(AgentError::Unauthorized);
+        }
+        if !status.is_success() {
+            return Err(AgentError::Rejected {
+                status: status.as_u16(),
+                body: String::new(),
+            });
+        }
+        Ok(response)
+    }
+
     pub async fn acknowledge(
         &self,
         node_id: &str,

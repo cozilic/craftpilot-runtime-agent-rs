@@ -3,6 +3,7 @@ mod api;
 mod config;
 mod docker;
 mod error;
+mod files;
 mod model;
 mod snapshot;
 mod state;

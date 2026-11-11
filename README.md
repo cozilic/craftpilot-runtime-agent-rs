@@ -5,9 +5,10 @@ built as a side project. The agent connects a trusted host to a CraftPilot maste
 Minecraft containers through the host's Docker daemon, and speaks the **same HTTP contract** as
 the Python agent — no master changes are required to run it side by side.
 
-> **Status: phase 4.** Enrollment, heartbeat, command claiming, acknowledgement, START, STOP, the
-> one-time initial SNAPSHOT and console commands work. File operations and migrations are still
-> acknowledged as `RUNTIME_ERROR`, so the panel shows a failure instead of a silent lease.
+> **Status: phase 5.** Enrollment, heartbeat, command claiming, acknowledgement, START, STOP, the
+> one-time initial SNAPSHOT, console commands and the file manager (list, read, mutations) work.
+> Migrations and file downloads are still acknowledged as `RUNTIME_ERROR`, so the panel shows a
+> failure instead of a silent lease.
 
 ## Implemented
 
@@ -28,6 +29,16 @@ the Python agent — no master changes are required to run it side by side.
 - **STOP** with the `force` flag: graceful `docker stop --time <grace>` otherwise
   `docker kill --signal=KILL`, answering `STOPPED` / `ALREADY_STOPPED`; a container that loses its
   labels is never touched.
+- **FILE MANAGER** (`file_list`, `file_read`, `file_mutate`): every path is normalised and then
+  resolved against the server's sandbox root — no `..`, no absolute or drive-letter paths, no
+  control characters, depth/segment/length limits, and the nearest existing ancestor is
+  canonicalised so a symlink can never lead outside the root. Listing is capped at 1000 entries;
+  reads are UTF-8 only and bounded by the edit limit. Mutations: `write` (atomic temp+rename),
+  `mkdir`, `touch`, `rename`, `delete` (a symlink is unlinked, never followed), `zip`, `unzip`
+  (validated, extracted to a temporary directory and only then moved into place, with ZIP-slip,
+  symlink, ratio and size guards) and `upload` (streamed from the master with the lease, checked
+  against the declared byte count and SHA-256). Results are posted to the master's
+  `commands/{id}/result` endpoint **before** the ack, which is where the master reads them.
 - **CONSOLE**: writes one attributed line to the game's console FIFO with the same argv shape as
   the master's own Docker adapter (`docker exec <name> sh -c 'printf … > /tmp/.craftpilot-console'
   sh <command>`), so the command is never interpolated into a shell script. Requires the container
@@ -47,7 +58,8 @@ the Python agent — no master changes are required to run it side by side.
 
 ## Not implemented yet
 
-File operations and migrations. Telemetry/`servers/report` is not sent
+File downloads (`file_download`, which streams a file back to the master) and migrations.
+  Telemetry/`servers/report` is not sent
   either, so a node running this agent appears online but reports no server data — the master
   therefore keeps a started server at `STARTING` until something else reports it. STOP sends
   SIGTERM to the JVM rather than Minecraft's own `stop` command over RCON; a server that needs an
@@ -68,6 +80,8 @@ File operations and migrations. Telemetry/`servers/report` is not sent
 | `CRAFTPILOT_STOP_GRACE_SECONDS` | `30` | `docker stop` timeout before the daemon sends SIGKILL, 0–45. |
 | `CRAFTPILOT_DOCKER_SERVER_DATA_ROOT` | – | Host-side data path for the volume when it differs from the in-container mount (Docker Desktop). |
 | `CRAFTPILOT_DATA_GID` | `33` | Group that staged server files are shared with (Minecraft's GID in the panel images). |
+| `CRAFTPILOT_MAX_EDIT_BYTES` | `4194304` | Largest file the editor may read or write (same as the master's `server.files.max_edit_bytes`). |
+| `CRAFTPILOT_MAX_UPLOAD_BYTES` | `2147483648` | Largest upload accepted from the master (same as `server.files.max_upload_bytes`). |
 | `RUST_LOG` | `info` | Log filter. Console text, credentials and RCON passwords are never logged. |
 
 ## Run locally

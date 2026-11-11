@@ -289,7 +289,7 @@ fn safe_entry(name: &str, unix_mode: Option<u32>) -> Result<PathBuf> {
     Ok(PathBuf::from(normalized))
 }
 
-fn extract_zip(archive: &Path, target: &Path) -> Result<u64> {
+pub(crate) fn extract_zip(archive: &Path, target: &Path) -> Result<u64> {
     let file = std::fs::File::open(archive)?;
     let mut zip = zip::ZipArchive::new(file)
         .map_err(|_| invalid("snapshot archive is not a valid zip file"))?;

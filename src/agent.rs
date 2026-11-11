@@ -8,6 +8,7 @@ use crate::api::MasterClient;
 use crate::config::Config;
 use crate::docker::Docker;
 use crate::error::{AgentError, Result};
+use crate::files::Files;
 use crate::model::{AckRequest, Command};
 use crate::snapshot::Snapshotter;
 use crate::state::StateStore;
@@ -24,6 +25,7 @@ pub struct Agent {
     api: MasterClient,
     docker: Docker,
     snapshot: Snapshotter,
+    files: Files,
 }
 
 impl Agent {
@@ -42,12 +44,18 @@ impl Agent {
             cfg.master_url.clone(),
             cfg.data_gid,
         );
+        let files = Files::new(
+            cfg.server_data_root.clone(),
+            cfg.max_edit_bytes,
+            cfg.max_upload_bytes,
+        );
         Ok(Self {
             cfg,
             store,
             api,
             docker,
             snapshot,
+            files,
         })
     }
 
@@ -286,6 +294,9 @@ impl Agent {
                     )
                 }
             },
+            "file_list" | "file_read" | "file_mutate" => {
+                return self.file_command(command).await;
+            }
             "console" => match self.docker.console(&command.payload).await {
                 Ok(raw) => (
                     true,
@@ -375,6 +386,57 @@ impl Agent {
         }
     }
 
+    /// Filoperationer levererar sitt `result_data` till mastern FÖRE acken
+    /// — masterns ack verifierar att resultatet finns och matchar
+    /// kommandots payload.
+    async fn file_command(&self, command: &Command) -> AckRequest {
+        let Some(node_id) = self.store.state().node_id.clone() else {
+            return failure(command, "the agent has no node id");
+        };
+
+        let (result, result_code) = match command.command_type.as_str() {
+            "file_list" => (self.files.list(&command.payload), "FILE_LISTED"),
+            "file_read" => (self.files.read(&command.payload), "FILE_READ"),
+            _ => (
+                self.files
+                    .mutate(
+                        &command.payload,
+                        &self.api,
+                        &node_id,
+                        &command.id,
+                        &command.lease_token,
+                    )
+                    .await,
+                "FILE_MUTATED",
+            ),
+        };
+
+        let value = match result {
+            Ok(value) => value,
+            Err(err) => {
+                warn!(command_id = %command.id, error = %err, "file operation failed");
+                return failure(command, &ack_message(&err));
+            }
+        };
+
+        if let Err(err) = self
+            .api
+            .store_result(&node_id, &command.id, &command.lease_token, &value)
+            .await
+        {
+            warn!(command_id = %command.id, error = %err, "storing the file result failed");
+            return failure(command, &ack_message(&err));
+        }
+
+        AckRequest {
+            lease_token: command.lease_token.clone(),
+            success: true,
+            result_code: result_code.to_string(),
+            message: None,
+            container_id: None,
+        }
+    }
+
     fn forget_credential(&mut self) -> Result<()> {
         {
             let state = self.store.state_mut();
@@ -392,6 +454,16 @@ impl Agent {
 /// Docker-fel ska trunkeras, inte göra acken ogiltig.
 fn ack_message(error: &AgentError) -> String {
     error.to_string().chars().take(300).collect()
+}
+
+fn failure(command: &Command, message: &str) -> AckRequest {
+    AckRequest {
+        lease_token: command.lease_token.clone(),
+        success: false,
+        result_code: "RUNTIME_ERROR".to_string(),
+        message: Some(message.to_string()),
+        container_id: None,
+    }
 }
 
 /// Mastern verifierar `sha256(payload.command)` i console-acken.
