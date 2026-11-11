@@ -19,6 +19,15 @@ pub struct Config {
     pub agent_version: String,
     pub hostname: String,
     pub poll_seconds: u64,
+    /// Docker-nätverket som spelcontainrarna ansluts till.
+    pub docker_network: String,
+    /// Exakta image-namn agenten får starta (masterns Java-lista + Pumpkin).
+    pub allowed_images: Vec<String>,
+    /// Hur länge `docker stop` får vänta på en frivillig avstängning.
+    pub stop_grace_seconds: u64,
+    /// Värdsökvägen som Docker daemon ser för serverdata (Docker Desktop
+    /// behöver t.ex. `C:/Projects/...` i stället för containerns mount).
+    pub docker_data_root: Option<String>,
 }
 
 impl Config {
@@ -43,6 +52,20 @@ impl Config {
             ));
         }
 
+        let docker_network = env_or("CRAFTPILOT_DOCKER_NETWORK", "craftpilot-servers");
+        if !is_docker_name(&docker_network) {
+            return Err(AgentError::Config(
+                "CRAFTPILOT_DOCKER_NETWORK is not a valid Docker network name".into(),
+            ));
+        }
+
+        let stop_grace_seconds = parse_u64("CRAFTPILOT_STOP_GRACE_SECONDS", 30)?;
+        if stop_grace_seconds > 45 {
+            return Err(AgentError::Config(
+                "CRAFTPILOT_STOP_GRACE_SECONDS must be 0-45".into(),
+            ));
+        }
+
         Ok(Self {
             master_url,
             node_id: optional_env("CRAFTPILOT_NODE_ID"),
@@ -55,6 +78,11 @@ impl Config {
             agent_version: env!("CARGO_PKG_VERSION").to_string(),
             hostname: detect_hostname(),
             poll_seconds,
+            docker_network,
+            allowed_images: parse_image_list("CRAFTPILOT_ALLOWED_IMAGES", DEFAULT_ALLOWED_IMAGES),
+            stop_grace_seconds,
+            docker_data_root: optional_env("CRAFTPILOT_DOCKER_SERVER_DATA_ROOT")
+                .map(|root| root.trim_end_matches(['/', '\\']).to_string()),
         })
     }
 }
@@ -107,6 +135,39 @@ fn optional_env(key: &str) -> Option<String> {
         Ok(value) if !value.trim().is_empty() => Some(value.trim().to_string()),
         _ => None,
     }
+}
+
+/// Samma bilder som masterns `server.java_images` plus den egna
+/// Pumpkin-bilden (nativ binär utan JVM). En image utanför listan startas
+/// aldrig, oavsett vad en kommandopayload säger.
+pub const DEFAULT_ALLOWED_IMAGES: &[&str] = &[
+    "eclipse-temurin:8-jre",
+    "eclipse-temurin:11-jre",
+    "eclipse-temurin:17-jre",
+    "eclipse-temurin:21-jre",
+    "eclipse-temurin:25-jre",
+    "craftpilot-pumpkin:latest",
+];
+
+fn parse_image_list(key: &str, default: &[&str]) -> Vec<String> {
+    match std::env::var(key) {
+        Ok(value) if !value.trim().is_empty() => value
+            .split(',')
+            .map(str::trim)
+            .filter(|image| !image.is_empty())
+            .map(str::to_string)
+            .collect(),
+        _ => default.iter().map(|image| image.to_string()).collect(),
+    }
+}
+
+/// Docker tillåter punkt, bindestreck och understreck i nätverksnamn.
+fn is_docker_name(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 63
+        && value
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '.' | '-'))
 }
 
 fn parse_u64(key: &str, default: u64) -> Result<u64> {
@@ -172,6 +233,14 @@ mod tests {
     #[test]
     fn rejects_embedded_credentials() {
         assert!(parse_https_origin("https://user:pass@craftpilot.se").is_err());
+    }
+
+    #[test]
+    fn rejects_an_invalid_docker_network() {
+        assert!(is_docker_name("craftpilot-servers"));
+        assert!(is_docker_name("cp_net.1"));
+        assert!(!is_docker_name("craftpilot servers"));
+        assert!(!is_docker_name(""));
     }
 
     #[test]

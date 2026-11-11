@@ -5,9 +5,9 @@ built as a side project. The agent connects a trusted host to a CraftPilot maste
 Minecraft containers through the host's Docker daemon, and speaks the **same HTTP contract** as
 the Python agent — no master changes are required to run it side by side.
 
-> **Status: skeleton (phase 1).** Enrollment, heartbeat, command claiming and acknowledgement
-> work. No Minecraft operation is implemented yet: every claimed command is acknowledged with
-> `success=false` / `RUNTIME_ERROR`, so the panel shows a failure instead of a silent lease.
+> **Status: phase 2.** Enrollment, heartbeat, command claiming, acknowledgement, START and STOP
+> work. Snapshot, console, file operations and migrations are still acknowledged as
+> `RUNTIME_ERROR`, so the panel shows a failure instead of a silent lease.
 
 ## Implemented
 
@@ -18,15 +18,25 @@ the Python agent — no master changes are required to run it side by side.
 - Private state file (`state.json`, `0700` directory / `0600` file) with the node ID, credential,
   pending enrollment and a strictly increasing heartbeat sequence, written atomically.
 - Heartbeat on startup, then `commands/claim` every poll interval (the master counts a claim as a
-  heartbeat, so each request consumes a new sequence number).
-- Acknowledgement with lease token, including the "lease expired" path.
+  heartbeat, so each request consumes a new sequence number).- Acknowledgement with lease token, including the "lease expired" path.
+- **START** through the Docker CLI: derives `craftpilot-<server-id[0..8]>`, verifies the
+  `craftpilot.managed=1` / `craftpilot.server_id` labels before touching an existing container,
+  refuses images outside the allowlist and networks other than its own, mounts
+  `<data root>/<server uuid>` at the spec's mount path, and runs `docker run` with a fixed argv
+  (`--memory`, `--memory-swap`, `--cpus`, `--restart no`, `--user`, `--publish <port>:25565/tcp`).
+  START is idempotent and answers `ALREADY_RUNNING` when the container already runs.
+- **STOP** with the `force` flag: graceful `docker stop --time <grace>` otherwise
+  `docker kill --signal=KILL`, answering `STOPPED` / `ALREADY_STOPPED`; a container that loses its
+  labels is never touched.
 - Signed-off configuration validation: HTTPS-only master origin with no path/query/credentials,
-  poll interval 5–120 s, absolute data root.
+  poll interval 5–120 s, absolute data root, Docker network name, stop grace 0–45 s.
 
 ## Not implemented yet
 
-`snapshot`, `start`, `stop`, `console`, file operations and migrations. Telemetry/`servers/report`
-is not sent either, so a node running this agent appears online but reports no server data.
+`snapshot`, `console`, file operations and migrations. Telemetry/`servers/report` is not sent
+  either, so a node running this agent appears online but reports no server data. STOP sends
+  SIGTERM to the JVM rather than Minecraft's own `stop` command over RCON; a server that needs an
+  explicit save-on-stop gets the JVM shutdown hook only.
 
 ## Configuration
 
@@ -38,6 +48,10 @@ is not sent either, so a node running this agent appears online but reports no s
 | `CRAFTPILOT_NODE_ID` | – | Only to attach an existing node. |
 | `CRAFTPILOT_REGISTRATION_TOKEN` | – | One-time token for a re-enabled node. |
 | `CRAFTPILOT_POLL_SECONDS` | `5` | Command poll interval, 5–120. |
+| `CRAFTPILOT_DOCKER_NETWORK` | `craftpilot-servers` | Network the game containers join; a spec for another network is refused. |
+| `CRAFTPILOT_ALLOWED_IMAGES` | master Java images + `craftpilot-pumpkin:latest` | Exact image allowlist. |
+| `CRAFTPILOT_STOP_GRACE_SECONDS` | `30` | `docker stop` timeout before the daemon sends SIGKILL, 0–45. |
+| `CRAFTPILOT_DOCKER_SERVER_DATA_ROOT` | – | Host-side data path for the volume when it differs from the in-container mount (Docker Desktop). |
 | `RUST_LOG` | `info` | Log filter. Console text, credentials and RCON passwords are never logged. |
 
 ## Run locally
@@ -67,6 +81,23 @@ cargo build --release
 
 The Docker image is a multi-stage build: `rust:1-alpine` (musl) produces a static binary that is
 copied into `docker:27-cli`, because the agent needs the Docker CLI and must stay small.
+
+START/STOP require the Docker socket, the game network and the server data root:
+
+```sh
+docker run -d --name craftpilot-runtime-agent-rs \
+  --network craftpilot_default \
+  -e CRAFTPILOT_MASTER_URL=https://runtime-tls \
+  -e CRAFTPILOT_DOCKER_NETWORK=craftpilot-servers \
+  -e CRAFTPILOT_DOCKER_SERVER_DATA_ROOT=/host/path/to/server-data \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -v /host/path/to/server-data:/srv/craftpilot/servers \
+  -v craftpilot_rs_agent_state:/var/lib/craftpilot-agent \
+  craftpilot-runtime-agent-rs:dev
+
+# The agent must also see the game network it starts containers on.
+docker network connect craftpilot-servers craftpilot-runtime-agent-rs
+```
 
 ## Security
 

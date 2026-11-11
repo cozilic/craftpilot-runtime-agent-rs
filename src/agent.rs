@@ -5,6 +5,7 @@ use tracing::{info, warn};
 
 use crate::api::MasterClient;
 use crate::config::Config;
+use crate::docker::Docker;
 use crate::error::{AgentError, Result};
 use crate::model::{AckRequest, Command};
 use crate::state::StateStore;
@@ -19,13 +20,26 @@ pub struct Agent {
     cfg: Config,
     store: StateStore,
     api: MasterClient,
+    docker: Docker,
 }
 
 impl Agent {
     pub fn new(cfg: Config) -> Result<Self> {
         let store = StateStore::open(&cfg.state_dir)?;
         let api = MasterClient::new(cfg.master_url.clone())?;
-        Ok(Self { cfg, store, api })
+        let docker = Docker::new(
+            cfg.server_data_root.clone(),
+            cfg.docker_data_root.clone().map(std::path::PathBuf::from),
+            cfg.docker_network.clone(),
+            cfg.allowed_images.clone(),
+            cfg.stop_grace_seconds,
+        );
+        Ok(Self {
+            cfg,
+            store,
+            api,
+            docker,
+        })
     }
 
     pub async fn run(mut self) -> Result<()> {
@@ -226,7 +240,7 @@ impl Agent {
             "claimed a command"
         );
 
-        let ack = self.unsupported(&command);
+        let ack = self.execute(&command).await;
         match self.api.acknowledge(&node_id, &command.id, &ack).await {
             Ok(_) => Ok(()),
             Err(AgentError::Conflict(body)) => {
@@ -237,18 +251,71 @@ impl Agent {
         }
     }
 
-    /// Etapp 1: ingen operation är porterad ännu. Ack:en är ärlig —
-    /// mastern markerar kommandot failed och panelen visar varför.
-    fn unsupported(&self, command: &Command) -> AckRequest {
+    /// Kör START/STOP via Docker. Övriga operationer ackas ärligt som
+    /// RUNTIME_ERROR så att masterns kö aldrig fastnar på en död lease.
+    async fn execute(&self, command: &Command) -> AckRequest {
+        let (success, result_code, message, container_id) = match command.command_type.as_str() {
+            "start" => match self.docker.start(&command.payload).await {
+                Ok(outcome) => (
+                    true,
+                    if outcome.already_running {
+                        "ALREADY_RUNNING"
+                    } else {
+                        "STARTED"
+                    }
+                    .to_string(),
+                    None,
+                    Some(outcome.container_id),
+                ),
+                Err(err) => {
+                    warn!(command_id = %command.id, error = %err, "start failed");
+                    (
+                        false,
+                        "RUNTIME_ERROR".to_string(),
+                        Some(ack_message(&err)),
+                        None,
+                    )
+                }
+            },
+            "stop" => match self.docker.stop(&command.payload).await {
+                Ok(outcome) => (
+                    true,
+                    if outcome.already_stopped {
+                        "ALREADY_STOPPED"
+                    } else {
+                        "STOPPED"
+                    }
+                    .to_string(),
+                    None,
+                    None,
+                ),
+                Err(err) => {
+                    warn!(command_id = %command.id, error = %err, "stop failed");
+                    (
+                        false,
+                        "RUNTIME_ERROR".to_string(),
+                        Some(ack_message(&err)),
+                        None,
+                    )
+                }
+            },
+            other => {
+                warn!(command_id = %command.id, command_type = other, "command is not implemented");
+                (
+                    false,
+                    "RUNTIME_ERROR".to_string(),
+                    Some(format!("{other} is not implemented in the Rust agent yet")),
+                    None,
+                )
+            }
+        };
+
         AckRequest {
             lease_token: command.lease_token.clone(),
-            success: false,
-            result_code: "RUNTIME_ERROR".to_string(),
-            message: Some(format!(
-                "{} is not implemented in the Rust skeleton yet",
-                command.command_type
-            )),
-            container_id: None,
+            success,
+            result_code,
+            message,
+            container_id,
         }
     }
 
@@ -263,4 +330,10 @@ impl Agent {
         self.api.set_credential(None);
         Ok(())
     }
+}
+
+/// Mastern tillåter högst 300 tecken i ack:ens `message`; ett längre
+/// Docker-fel ska trunkeras, inte göra acken ogiltig.
+fn ack_message(error: &AgentError) -> String {
+    error.to_string().chars().take(300).collect()
 }

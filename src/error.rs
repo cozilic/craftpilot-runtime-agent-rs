@@ -32,6 +32,11 @@ pub enum AgentError {
 
     #[error("the master rejected the request: {status} {body}")]
     Rejected { status: u16, body: String },
+
+    /// Ett kommando som mastern bad om men som agenten inte kunde utföra.
+    /// Texten hamnar i ack:ens `message` (max 300 tecken).
+    #[error("{0}")]
+    Runtime(String),
 }
 
 pub type Result<T> = StdResult<T, AgentError>;
