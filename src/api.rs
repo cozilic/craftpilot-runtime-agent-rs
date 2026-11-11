@@ -16,6 +16,8 @@ use crate::model::{
 /// som bearer när anropet är autentiserat.
 pub struct MasterClient {
     http: Client,
+    /// Nedladdningar strömmas: ingen total timeout, bara en anslutningstimeout.
+    stream_http: Client,
     base: Url,
     credential: Option<String>,
 }
@@ -31,8 +33,18 @@ impl MasterClient {
             ))
             .build()?;
 
+        let stream_http = Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .connect_timeout(Duration::from_secs(10))
+            .user_agent(format!(
+                "craftpilot-runtime-agent-rs/{}",
+                env!("CARGO_PKG_VERSION")
+            ))
+            .build()?;
+
         Ok(Self {
             http,
+            stream_http,
             base,
             credential: None,
         })
@@ -238,6 +250,35 @@ impl MasterClient {
             true,
         )
         .await
+    }
+
+    /// Strömmar en fil till masterns `/result`-endpoint. Leasen går i
+    /// `X-Result-Lease` och `Content-Length` måste vara exakt — mastern
+    /// läser råbody, inte JSON.
+    pub async fn upload_file_result(
+        &self,
+        node_id: &str,
+        command_id: &str,
+        lease_token: &str,
+        path: &std::path::Path,
+        bytes: u64,
+    ) -> Result<Value> {
+        let credential = self.credential.as_deref().ok_or(AgentError::Unauthorized)?;
+        let file = tokio::fs::File::open(path).await?;
+        let body = reqwest::Body::wrap_stream(tokio_util::io::ReaderStream::new(file));
+        let response = self
+            .stream_http
+            .put(self.url(&format!(
+                "api/runtime/nodes/{node_id}/commands/{command_id}/result"
+            ))?)
+            .header("X-Result-Lease", lease_token)
+            .header("Content-Length", bytes.to_string())
+            .header("Content-Type", "application/octet-stream")
+            .bearer_auth(credential)
+            .body(body)
+            .send()
+            .await?;
+        self.migration_response(response).await
     }
 
     /// Hämtar en uppladdning som mastern redan verifierat. Leasen går i

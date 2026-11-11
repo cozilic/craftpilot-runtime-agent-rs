@@ -7,8 +7,7 @@ the Python agent — no master changes are required to run it side by side.
 
 > **Status: phase 7.** Enrollment, heartbeat, command claiming, acknowledgement, START, STOP, the
 > one-time initial SNAPSHOT, console commands, the file manager, encrypted runtime-node migrations
-> and server telemetry work. `file_download` is still acknowledged as `RUNTIME_ERROR`, so the
-> panel shows a failure instead of a silent lease.
+> and server telemetry work, and file downloads stream to the master.
 
 ## Implemented
 
@@ -75,11 +74,11 @@ the Python agent — no master changes are required to run it side by side.
 
 ## Not implemented yet
 
-File downloads (`file_download`, which streams a file back to the master).
-  Server disk usage (`disk_used_mb`) and artifact presence (`artifact_present`) are not reported
+Server disk usage (`disk_used_mb`) and artifact presence (`artifact_present`) are not reported
   yet, and the log cursor is in-memory, so an agent restart re-sends one backlog window. STOP
   sends SIGTERM to the JVM rather than Minecraft's own `stop` command over RCON; a server that
-  needs an explicit save-on-stop gets the JVM shutdown hook only.
+  needs an explicit save-on-stop gets the JVM shutdown hook only. A download larger than
+  `CRAFTPILOT_MAX_UPLOAD_BYTES` is refused before anything is streamed.
 
 ## Configuration
 

@@ -129,6 +129,28 @@ impl Files {
         }))
     }
 
+    /// Sökväg och storlek för en nedladdning. Samma sandbox som läsning,
+    /// men filen får vara upp till masterns nedladdningsgräns.
+    pub fn download_source(&self, payload: &Value) -> Result<(PathBuf, u64)> {
+        let root = self.root_for(&server_id(payload)?)?;
+        let path = payload_path(payload)?;
+        if path.is_empty() {
+            return Err(invalid("the server root is a directory"));
+        }
+
+        let absolute = resolve(&root, &path, true)?;
+        let metadata =
+            std::fs::metadata(&absolute).map_err(|_| invalid("the file does not exist"))?;
+        if !metadata.is_file() {
+            return Err(invalid("the path is not a file"));
+        }
+        if metadata.len() > self.max_upload_bytes {
+            return Err(invalid("the file is larger than the download limit"));
+        }
+
+        Ok((absolute, metadata.len()))
+    }
+
     pub async fn mutate(
         &self,
         payload: &Value,
@@ -932,6 +954,27 @@ mod tests {
 
         assert!(files.unzip(&root, "evil.zip").is_err());
         assert!(!dir.join("root").join("escaped.txt").exists());
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn download_source_accepts_files_and_rejects_directories() {
+        let (dir, files) = sandbox();
+        let root = server_root(&dir);
+        std::fs::write(root.join("server.properties"), "motd=hej\n").unwrap();
+        std::fs::create_dir_all(root.join("world")).unwrap();
+
+        let (path, bytes) = files
+            .download_source(&payload("server.properties"))
+            .unwrap();
+        assert_eq!(bytes, 9);
+        assert!(path.ends_with("server.properties"));
+
+        assert!(files.download_source(&payload("")).is_err());
+        assert!(files.download_source(&payload("world")).is_err());
+        assert!(files.download_source(&payload("missing.txt")).is_err());
+        assert!(files.download_source(&payload("../escape.txt")).is_err());
 
         std::fs::remove_dir_all(&dir).unwrap();
     }

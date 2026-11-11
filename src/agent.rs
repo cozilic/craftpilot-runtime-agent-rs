@@ -323,6 +323,7 @@ impl Agent {
             "file_list" | "file_read" | "file_mutate" => {
                 return self.file_command(command).await;
             }
+            "file_download" => return self.download_command(command).await,
             "migration_prepare"
             | "migration_export"
             | "migration_import"
@@ -479,6 +480,62 @@ impl Agent {
             result_code: result_code.to_string(),
             message: None,
             container_id: None,
+        }
+    }
+
+    /// Filnedladdning: mastern får råbytes via PUT innan acken, och acken
+    /// måste bära samma sha256 (message) och storlek (container_id) som
+    /// mastern sparade.
+    async fn download_command(&self, command: &Command) -> AckRequest {
+        let Some(node_id) = self.store.state().node_id.clone() else {
+            return failure(command, "the agent has no node id");
+        };
+
+        let (path, bytes) = match self.files.download_source(&command.payload) {
+            Ok(source) => source,
+            Err(err) => {
+                warn!(command_id = %command.id, error = %err, "download source is invalid");
+                return failure(command, &ack_message(&err));
+            }
+        };
+        let digest = match tokio::task::spawn_blocking({
+            let path = path.clone();
+            move || sha256_file(&path)
+        })
+        .await
+        {
+            Ok(Ok(digest)) => digest,
+            Ok(Err(err)) => {
+                warn!(command_id = %command.id, error = %err, "hashing the download failed");
+                return failure(command, "the file could not be read");
+            }
+            Err(_) => return failure(command, "hashing the download failed"),
+        };
+
+        let stored = match self
+            .api
+            .upload_file_result(&node_id, &command.id, &command.lease_token, &path, bytes)
+            .await
+        {
+            Ok(stored) => stored,
+            Err(err) => {
+                warn!(command_id = %command.id, error = %err, "uploading the download failed");
+                return failure(command, &ack_message(&err));
+            }
+        };
+        let stored_sha = stored.get("sha256").and_then(Value::as_str);
+        let stored_bytes = stored.get("bytes").and_then(Value::as_u64);
+        if stored_sha != Some(digest.as_str()) || stored_bytes != Some(bytes) {
+            warn!(command_id = %command.id, "the master stored a different file than was sent");
+            return failure(command, "the master stored a different file than was sent");
+        }
+
+        AckRequest {
+            lease_token: command.lease_token.clone(),
+            success: true,
+            result_code: "FILE_DOWNLOADED".to_string(),
+            message: Some(digest),
+            container_id: Some(bytes.to_string()),
         }
     }
 
@@ -651,6 +708,23 @@ fn failure(command: &Command, message: &str) -> AckRequest {
         message: Some(message.to_string()),
         container_id: None,
     }
+}
+
+/// Läser filen i 1 MiB-block så stora servrar inte behöver ligga i minnet.
+fn sha256_file(path: &std::path::Path) -> Result<String> {
+    use std::io::Read;
+
+    let mut file = std::fs::File::open(path)?;
+    let mut hasher = Sha256::new();
+    let mut buffer = vec![0u8; 1024 * 1024];
+    loop {
+        let read = file.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    Ok(format!("{:x}", hasher.finalize()))
 }
 
 /// Mastern verifierar `sha256(payload.command)` i console-acken.
