@@ -25,6 +25,11 @@ pub struct AgentState {
     #[allow(dead_code)]
     #[serde(default)]
     pub rcon_passwords: BTreeMap<String, String>,
+    /// Senaste loggtidsstämpeln som rapporterats per server. Sparas så en
+    /// omstart fortsätter där agenten slutade i stället för att skicka om
+    /// hela loggfönstret till panelen.
+    #[serde(default)]
+    pub log_cursors: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -83,6 +88,22 @@ impl StateStore {
         self.state.heartbeat_sequence += 1;
         self.save()?;
         Ok(self.state.heartbeat_sequence as i64)
+    }
+
+    pub fn log_cursor(&self, server_id: &str) -> Option<&str> {
+        self.state.log_cursors.get(server_id).map(String::as_str)
+    }
+
+    /// Sparar kursorn direkt: en krasch efter rapporten får inte leda till
+    /// att samma rader skickas igen vid nästa start.
+    pub fn set_log_cursor(&mut self, server_id: &str, timestamp: &str) -> Result<()> {
+        if self.log_cursor(server_id) == Some(timestamp) {
+            return Ok(());
+        }
+        self.state
+            .log_cursors
+            .insert(server_id.to_string(), timestamp.to_string());
+        self.save()
     }
 
     pub fn save(&self) -> Result<()> {
@@ -156,6 +177,31 @@ mod tests {
 
         let mut reloaded = StateStore::open(&dir).unwrap();
         assert_eq!(reloaded.next_sequence().unwrap(), 3);
+
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn log_cursor_survives_a_restart() {
+        let dir = temporary_dir("log-cursor");
+        let mut store = StateStore::open(&dir).unwrap();
+        store
+            .set_log_cursor("server-1", "2026-11-11T22:00:00.000000001Z")
+            .unwrap();
+        drop(store);
+
+        let mut reloaded = StateStore::open(&dir).unwrap();
+        assert_eq!(
+            reloaded.log_cursor("server-1"),
+            Some("2026-11-11T22:00:00.000000001Z")
+        );
+        reloaded
+            .set_log_cursor("server-1", "2026-11-11T22:00:01Z")
+            .unwrap();
+        assert_eq!(
+            StateStore::open(&dir).unwrap().log_cursor("server-1"),
+            Some("2026-11-11T22:00:01Z")
+        );
 
         fs::remove_dir_all(&dir).unwrap();
     }

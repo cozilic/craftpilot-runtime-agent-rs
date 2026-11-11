@@ -618,9 +618,15 @@ impl Agent {
         };
 
         for id in servers.iter().filter_map(Value::as_str) {
+            let since = self.store.log_cursor(id).map(str::to_string);
             let sample = match self
                 .reporter
-                .sample(&self.docker, &self.cfg.server_data_root, id)
+                .sample(
+                    &self.docker,
+                    &self.cfg.server_data_root,
+                    id,
+                    since.as_deref(),
+                )
                 .await
             {
                 Ok(sample) => sample,
@@ -629,6 +635,14 @@ impl Agent {
                     continue;
                 }
             };
+            if let Some(cursor) = sample.cursor.as_deref() {
+                if since.as_deref() != Some(cursor) {
+                    if let Err(err) = self.store.set_log_cursor(id, cursor) {
+                        warn!(server_id = %id, error = %err, "saving the log cursor failed");
+                    }
+                }
+            }
+
             let sequence = match self.store.next_sequence() {
                 Ok(sequence) => sequence,
                 Err(err) => {

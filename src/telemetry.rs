@@ -9,10 +9,9 @@ const LOG_WINDOW: usize = 400;
 const MAX_LOG_CHARS: usize = 8192;
 
 /// Telemetri per server: status, containerdata, spelare och nya
-/// konsolrader. Loggkursorn hålls i minnet, så en omstart skickar en
-/// fönsterbacklog en gång och därefter bara nya rader.
+/// konsolrader. Loggkursorn ägs av anroparen (state-filen), så en omstart
+/// fortsätter där agenten slutade i stället för att skicka om backloggen.
 pub struct Reporter {
-    cursors: HashMap<String, String>,
     players: HashMap<String, i64>,
 }
 
@@ -24,12 +23,13 @@ pub struct Sample {
     pub players_online: Option<i64>,
     pub players_max: Option<i64>,
     pub logs: Vec<(String, String)>,
+    /// Senaste sedda loggtidsstämpeln, att spara som nästa `since`.
+    pub cursor: Option<String>,
 }
 
 impl Reporter {
     pub fn new() -> Self {
         Self {
-            cursors: HashMap::new(),
             players: HashMap::new(),
         }
     }
@@ -39,6 +39,7 @@ impl Reporter {
         docker: &Docker,
         data_root: &Path,
         server_id: &str,
+        since: Option<&str>,
     ) -> Result<Sample> {
         let state = docker.state(server_id).await?;
         let status = match &state {
@@ -54,11 +55,15 @@ impl Reporter {
             None
         };
 
-        let since = self.cursors.get(server_id).cloned();
-        let lines = docker.logs_since(server_id, since.as_deref()).await?;
+        let mut cursor = since.map(str::to_string);
+        let lines = docker.logs_since(server_id, since).await?;
         let mut logs = Vec::new();
         for (ts, text) in lines {
-            self.cursors.insert(server_id.to_string(), ts.clone());
+            // Docker `--since` är inkluderande: gränsraden har redan skickats.
+            if !is_new(cursor.as_deref(), &ts) {
+                continue;
+            }
+            cursor = Some(ts.clone());
             let text = sanitize(&text);
             if text.is_empty() {
                 continue;
@@ -78,6 +83,7 @@ impl Reporter {
             players_online: self.players.get(server_id).copied(),
             players_max: max_players(data_root, server_id),
             logs,
+            cursor,
         })
     }
 
@@ -102,6 +108,10 @@ impl Default for Reporter {
     fn default() -> Self {
         Self::new()
     }
+}
+
+fn is_new(cursor: Option<&str>, timestamp: &str) -> bool {
+    cursor.is_none_or(|cursor| timestamp > cursor)
 }
 
 /// `max-players` ur serverns `server.properties` (samma standard som
@@ -134,6 +144,20 @@ fn sanitize(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn skips_the_inclusive_since_boundary() {
+        assert!(is_new(None, "2026-11-11T22:00:00Z"));
+        assert!(!is_new(
+            Some("2026-11-11T22:00:00Z"),
+            "2026-11-11T22:00:00Z"
+        ));
+        assert!(is_new(Some("2026-11-11T22:00:00Z"), "2026-11-11T22:00:01Z"));
+        assert!(!is_new(
+            Some("2026-11-11T22:00:01Z"),
+            "2026-11-11T22:00:00Z"
+        ));
+    }
 
     #[test]
     fn counts_players_from_join_and_leave_lines() {

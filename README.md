@@ -33,7 +33,8 @@ the Python agent — no master changes are required to run it side by side.
   running → `ONLINE`, exited 0 → `OFFLINE`, non-zero → `CRASHED`), CPU/memory from
   `docker stats --no-stream`, `players_max` from `server.properties` (`max-players`, default 20),
   `players_online` from join/leave console lines, and new console lines from
-  `docker logs --timestamps` with an in-memory cursor (the first report sends a 400-line backlog).
+  `docker logs --timestamps` with a cursor persisted in the state volume (the first report sends a
+  400-line backlog; after a restart only new lines are sent).
   Each report consumes a new sequence number, so the master never sees it as a replay.
 - **MIGRATIONS** (`migration_prepare`, `migration_stop`, `migration_export`, `migration_import`,
   `migration_commit`, `migration_delete_source`): the destination creates an X25519 keypair and
@@ -72,10 +73,8 @@ the Python agent — no master changes are required to run it side by side.
 - Signed-off configuration validation: HTTPS-only master origin with no path/query/credentials,
   poll interval 5–120 s, absolute data root, Docker network name, stop grace 0–45 s.
 
-## Not implemented yet
-
-Server disk usage (`disk_used_mb`) and artifact presence (`artifact_present`) are not reported
-  yet, and the log cursor is in-memory, so an agent restart re-sends one backlog window. STOP
+## Not implemented yet  Server disk usage (`disk_used_mb`) and artifact presence (`artifact_present`) are not reported
+  yet. STOP
   sends SIGTERM to the JVM rather than Minecraft's own `stop` command over RCON; a server that
   needs an explicit save-on-stop gets the JVM shutdown hook only. A download larger than
   `CRAFTPILOT_MAX_UPLOAD_BYTES` is refused before anything is streamed.
