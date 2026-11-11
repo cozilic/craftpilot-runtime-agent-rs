@@ -8,6 +8,7 @@ use crate::config::Config;
 use crate::docker::Docker;
 use crate::error::{AgentError, Result};
 use crate::model::{AckRequest, Command};
+use crate::snapshot::Snapshotter;
 use crate::state::StateStore;
 
 /// Etapp 1 av Rust-agenten: enrollment, heartbeat, claim och ack.
@@ -21,6 +22,7 @@ pub struct Agent {
     store: StateStore,
     api: MasterClient,
     docker: Docker,
+    snapshot: Snapshotter,
 }
 
 impl Agent {
@@ -34,11 +36,17 @@ impl Agent {
             cfg.allowed_images.clone(),
             cfg.stop_grace_seconds,
         );
+        let snapshot = Snapshotter::new(
+            cfg.server_data_root.clone(),
+            cfg.master_url.clone(),
+            cfg.data_gid,
+        );
         Ok(Self {
             cfg,
             store,
             api,
             docker,
+            snapshot,
         })
     }
 
@@ -277,6 +285,36 @@ impl Agent {
                     )
                 }
             },
+            "snapshot" => {
+                let node_id = self.store.state().node_id.clone();
+                match node_id {
+                    Some(node_id) => {
+                        match self.snapshot.stage(&node_id, command, &self.api).await {
+                            Ok(outcome) => (
+                                true,
+                                "SNAPSHOT_STAGED".to_string(),
+                                Some(outcome.sha256),
+                                Some(outcome.bytes.to_string()),
+                            ),
+                            Err(err) => {
+                                warn!(command_id = %command.id, error = %err, "snapshot failed");
+                                (
+                                    false,
+                                    "RUNTIME_ERROR".to_string(),
+                                    Some(ack_message(&err)),
+                                    None,
+                                )
+                            }
+                        }
+                    }
+                    None => (
+                        false,
+                        "RUNTIME_ERROR".to_string(),
+                        Some("the agent has no node id".to_string()),
+                        None,
+                    ),
+                }
+            }
             "stop" => match self.docker.stop(&command.payload).await {
                 Ok(outcome) => (
                     true,

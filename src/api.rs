@@ -175,6 +175,30 @@ impl MasterClient {
         .await
     }
 
+    /// Hämtar en snapshot med nodens credential. Redirects följs aldrig,
+    /// så en 302 kan inte flytta nedladdningen till en annan värd.
+    pub async fn download(&self, url: &Url) -> Result<reqwest::Response> {
+        let credential = self.credential.as_deref().ok_or(AgentError::Unauthorized)?;
+        let response = self
+            .http
+            .get(url.clone())
+            .header("Accept", "application/zip")
+            .bearer_auth(credential)
+            .send()
+            .await?;
+        let status = response.status();
+        if status == StatusCode::UNAUTHORIZED {
+            return Err(AgentError::Unauthorized);
+        }
+        if !status.is_success() {
+            return Err(AgentError::Rejected {
+                status: status.as_u16(),
+                body: String::new(),
+            });
+        }
+        Ok(response)
+    }
+
     pub async fn acknowledge(
         &self,
         node_id: &str,

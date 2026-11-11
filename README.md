@@ -5,9 +5,9 @@ built as a side project. The agent connects a trusted host to a CraftPilot maste
 Minecraft containers through the host's Docker daemon, and speaks the **same HTTP contract** as
 the Python agent — no master changes are required to run it side by side.
 
-> **Status: phase 2.** Enrollment, heartbeat, command claiming, acknowledgement, START and STOP
-> work. Snapshot, console, file operations and migrations are still acknowledged as
-> `RUNTIME_ERROR`, so the panel shows a failure instead of a silent lease.
+> **Status: phase 3.** Enrollment, heartbeat, command claiming, acknowledgement, START, STOP and
+> the one-time initial SNAPSHOT work. Console, file operations and migrations are still
+> acknowledged as `RUNTIME_ERROR`, so the panel shows a failure instead of a silent lease.
 
 ## Implemented
 
@@ -28,12 +28,20 @@ the Python agent — no master changes are required to run it side by side.
 - **STOP** with the `force` flag: graceful `docker stop --time <grace>` otherwise
   `docker kill --signal=KILL`, answering `STOPPED` / `ALREADY_STOPPED`; a container that loses its
   labels is never touched.
+- **Initial SNAPSHOT** (the one-time master→node copy that makes a remote server startable):
+  downloads the bounded archive from this node's command URL with its bearer credential,
+  rejects any other origin, host, path, query or redirect, enforces the declared byte count and
+  SHA-256 while streaming, rejects unsafe ZIP entries (absolute or traversing paths, symlinks,
+  special files, control characters, per-file/size/ratio/count limits) and extracts into a
+  private staging directory. The result is installed with one atomic rename into a missing or
+  empty `<data root>/<server uuid>`; a non-empty destination is refused, never overwritten.
+  Answers `SNAPSHOT_STAGED` with the verified digest and byte count the master checks.
 - Signed-off configuration validation: HTTPS-only master origin with no path/query/credentials,
   poll interval 5–120 s, absolute data root, Docker network name, stop grace 0–45 s.
 
 ## Not implemented yet
 
-`snapshot`, `console`, file operations and migrations. Telemetry/`servers/report` is not sent
+`console`, file operations and migrations. Telemetry/`servers/report` is not sent
   either, so a node running this agent appears online but reports no server data. STOP sends
   SIGTERM to the JVM rather than Minecraft's own `stop` command over RCON; a server that needs an
   explicit save-on-stop gets the JVM shutdown hook only.
@@ -52,6 +60,7 @@ the Python agent — no master changes are required to run it side by side.
 | `CRAFTPILOT_ALLOWED_IMAGES` | master Java images + `craftpilot-pumpkin:latest` | Exact image allowlist. |
 | `CRAFTPILOT_STOP_GRACE_SECONDS` | `30` | `docker stop` timeout before the daemon sends SIGKILL, 0–45. |
 | `CRAFTPILOT_DOCKER_SERVER_DATA_ROOT` | – | Host-side data path for the volume when it differs from the in-container mount (Docker Desktop). |
+| `CRAFTPILOT_DATA_GID` | `33` | Group that staged server files are shared with (Minecraft's GID in the panel images). |
 | `RUST_LOG` | `info` | Log filter. Console text, credentials and RCON passwords are never logged. |
 
 ## Run locally

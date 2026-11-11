@@ -4,6 +4,7 @@ mod config;
 mod docker;
 mod error;
 mod model;
+mod snapshot;
 mod state;
 
 use tracing::error;

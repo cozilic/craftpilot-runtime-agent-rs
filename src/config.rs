@@ -28,6 +28,9 @@ pub struct Config {
     /// Värdsökvägen som Docker daemon ser för serverdata (Docker Desktop
     /// behöver t.ex. `C:/Projects/...` i stället för containerns mount).
     pub docker_data_root: Option<String>,
+    /// GID som spelcontainerns filer delas med (33 = Minecraft i panelens
+    /// images). Används när en snapshot installeras.
+    pub data_gid: u32,
 }
 
 impl Config {
@@ -83,6 +86,7 @@ impl Config {
             stop_grace_seconds,
             docker_data_root: optional_env("CRAFTPILOT_DOCKER_SERVER_DATA_ROOT")
                 .map(|root| root.trim_end_matches(['/', '\\']).to_string()),
+            data_gid: parse_u32("CRAFTPILOT_DATA_GID", 33)?,
         })
     }
 }
@@ -168,6 +172,16 @@ fn is_docker_name(value: &str) -> bool {
         && value
             .chars()
             .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '.' | '-'))
+}
+
+fn parse_u32(key: &str, default: u32) -> Result<u32> {
+    match std::env::var(key) {
+        Ok(value) if !value.trim().is_empty() => value
+            .trim()
+            .parse::<u32>()
+            .map_err(|_| AgentError::Config(format!("{key} must be an integer"))),
+        _ => Ok(default),
+    }
 }
 
 fn parse_u64(key: &str, default: u64) -> Result<u64> {
