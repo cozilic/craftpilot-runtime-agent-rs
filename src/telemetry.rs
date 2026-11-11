@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::path::Path;
+use std::time::{Duration, Instant};
 
 use crate::docker::Docker;
 use crate::error::Result;
@@ -7,12 +8,21 @@ use crate::error::Result;
 /// Hur många loggrader en rapport får bära (masterns `LOG_WINDOW`).
 const LOG_WINDOW: usize = 400;
 const MAX_LOG_CHARS: usize = 8192;
+/// En rekursiv genomgång av en stor värld får inte köras varje rapport.
+const DISK_CACHE_SECONDS: u64 = 300;
+
+/// Masterns artefaktkrav för en server (`artifacts` i `/servers`).
+pub struct Artifact<'a> {
+    pub jar: &'a str,
+    pub min_bytes: u64,
+}
 
 /// Telemetri per server: status, containerdata, spelare och nya
 /// konsolrader. Loggkursorn ägs av anroparen (state-filen), så en omstart
 /// fortsätter där agenten slutade i stället för att skicka om backloggen.
 pub struct Reporter {
     players: HashMap<String, i64>,
+    disk: HashMap<String, (Instant, u64)>,
 }
 
 pub struct Sample {
@@ -22,6 +32,8 @@ pub struct Sample {
     pub memory_limit_mb: Option<u64>,
     pub players_online: Option<i64>,
     pub players_max: Option<i64>,
+    pub disk_used_mb: Option<u64>,
+    pub artifact_present: Option<bool>,
     pub logs: Vec<(String, String)>,
     /// Senaste sedda loggtidsstämpeln, att spara som nästa `since`.
     pub cursor: Option<String>,
@@ -31,6 +43,7 @@ impl Reporter {
     pub fn new() -> Self {
         Self {
             players: HashMap::new(),
+            disk: HashMap::new(),
         }
     }
 
@@ -40,6 +53,7 @@ impl Reporter {
         data_root: &Path,
         server_id: &str,
         since: Option<&str>,
+        artifact: Option<Artifact<'_>>,
     ) -> Result<Sample> {
         let state = docker.state(server_id).await?;
         let status = match &state {
@@ -54,6 +68,10 @@ impl Reporter {
         } else {
             None
         };
+
+        let server_root = data_root.join(server_id);
+        let disk_used_mb = self.disk_usage(server_id, &server_root).await;
+        let artifact_present = artifact.map(|artifact| has_artifact(&server_root, &artifact));
 
         let mut cursor = since.map(str::to_string);
         let lines = docker.logs_since(server_id, since).await?;
@@ -82,9 +100,28 @@ impl Reporter {
             memory_limit_mb: stats.as_ref().and_then(|stats| stats.memory_limit_mb),
             players_online: self.players.get(server_id).copied(),
             players_max: max_players(data_root, server_id),
+            disk_used_mb,
+            artifact_present,
             logs,
             cursor,
         })
+    }
+
+    async fn disk_usage(&mut self, server_id: &str, root: &Path) -> Option<u64> {
+        if let Some((measured_at, value)) = self.disk.get(server_id) {
+            if measured_at.elapsed() < Duration::from_secs(DISK_CACHE_SECONDS) {
+                return Some(*value);
+            }
+        }
+
+        let path = root.to_path_buf();
+        let bytes = tokio::task::spawn_blocking(move || directory_bytes(&path))
+            .await
+            .ok()?;
+        let megabytes = bytes / (1024 * 1024);
+        self.disk
+            .insert(server_id.to_string(), (Instant::now(), megabytes));
+        Some(megabytes)
     }
 
     /// Spelarantalet räknas ur anslutningsraderna i den nya loggsträngen.
@@ -108,6 +145,54 @@ impl Default for Reporter {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Summerar vanliga filer under serverroten. Symlinks följs aldrig, så en
+/// länk ut ur roten varken räknas eller korsas.
+fn directory_bytes(root: &Path) -> u64 {
+    let mut total = 0u64;
+    let mut pending = vec![root.to_path_buf()];
+
+    while let Some(directory) = pending.pop() {
+        let Ok(entries) = std::fs::read_dir(directory) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let Ok(kind) = entry.file_type() else {
+                continue;
+            };
+            if kind.is_symlink() {
+                continue;
+            }
+            if kind.is_dir() {
+                pending.push(entry.path());
+            } else if kind.is_file() {
+                total = total.saturating_add(entry.metadata().map(|meta| meta.len()).unwrap_or(0));
+            }
+        }
+    }
+
+    total
+}
+
+fn has_artifact(root: &Path, artifact: &Artifact<'_>) -> bool {
+    if !is_safe_basename(artifact.jar) {
+        return false;
+    }
+
+    match std::fs::symlink_metadata(root.join(artifact.jar)) {
+        Ok(metadata) => metadata.file_type().is_file() && metadata.len() >= artifact.min_bytes,
+        Err(_) => false,
+    }
+}
+
+fn is_safe_basename(name: &str) -> bool {
+    !name.is_empty()
+        && name != "."
+        && name != ".."
+        && !name.contains('/')
+        && !name.contains('\\')
+        && !name.chars().any(char::is_control)
 }
 
 fn is_new(cursor: Option<&str>, timestamp: &str) -> bool {
@@ -144,6 +229,81 @@ fn sanitize(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn telemetry_dir(label: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "craftpilot-telemetry-{}-{}",
+            std::process::id(),
+            label
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn sums_regular_files_under_the_server_root() {
+        let dir = telemetry_dir("disk");
+        std::fs::create_dir_all(dir.join("world/region")).unwrap();
+        std::fs::write(dir.join("server.properties"), "x".repeat(1000)).unwrap();
+        std::fs::write(dir.join("world/level.dat"), "x".repeat(2000)).unwrap();
+        std::fs::write(dir.join("world/region/r.0.0.mca"), "x".repeat(3000)).unwrap();
+
+        assert_eq!(directory_bytes(&dir), 6000);
+        assert_eq!(directory_bytes(&dir.join("missing")), 0);
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn disk_usage_does_not_follow_symlinks() {
+        let dir = telemetry_dir("disk-symlink");
+        let outside = telemetry_dir("disk-outside");
+        std::fs::write(outside.join("big.bin"), "x".repeat(5000)).unwrap();
+        std::fs::write(dir.join("inside.bin"), "x".repeat(100)).unwrap();
+        std::os::unix::fs::symlink(&outside, dir.join("escape")).unwrap();
+
+        assert_eq!(directory_bytes(&dir), 100);
+
+        std::fs::remove_dir_all(&dir).unwrap();
+        std::fs::remove_dir_all(&outside).unwrap();
+    }
+
+    #[test]
+    fn artifact_presence_checks_size_and_basename() {
+        let dir = telemetry_dir("artifact");
+        std::fs::write(dir.join("server.jar"), "x".repeat(2048)).unwrap();
+
+        let present = Artifact {
+            jar: "server.jar",
+            min_bytes: 1024,
+        };
+        assert!(has_artifact(&dir, &present));
+        assert!(!has_artifact(
+            &dir,
+            &Artifact {
+                jar: "server.jar",
+                min_bytes: 4096
+            }
+        ));
+        assert!(!has_artifact(
+            &dir,
+            &Artifact {
+                jar: "../server.jar",
+                min_bytes: 0
+            }
+        ));
+        assert!(!has_artifact(
+            &dir,
+            &Artifact {
+                jar: "missing.jar",
+                min_bytes: 0
+            }
+        ));
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     #[test]
     fn skips_the_inclusive_since_boundary() {

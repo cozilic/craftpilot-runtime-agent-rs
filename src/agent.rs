@@ -14,7 +14,7 @@ use crate::migrations::Migrations;
 use crate::model::{AckRequest, Command};
 use crate::snapshot::Snapshotter;
 use crate::state::StateStore;
-use crate::telemetry::Reporter;
+use crate::telemetry::{Artifact, Reporter};
 
 /// Etapp 1 av Rust-agenten: enrollment, heartbeat, claim och ack.
 ///
@@ -616,8 +616,15 @@ impl Agent {
         let Some(servers) = listing.get("servers").and_then(Value::as_array) else {
             return;
         };
+        let artifacts = listing.get("artifacts");
 
         for id in servers.iter().filter_map(Value::as_str) {
+            let artifact = artifacts.and_then(|map| map.get(id)).and_then(|entry| {
+                Some(Artifact {
+                    jar: entry.get("jar").and_then(Value::as_str)?,
+                    min_bytes: entry.get("min_bytes").and_then(Value::as_u64).unwrap_or(0),
+                })
+            });
             let since = self.store.log_cursor(id).map(str::to_string);
             let sample = match self
                 .reporter
@@ -626,6 +633,7 @@ impl Agent {
                     &self.cfg.server_data_root,
                     id,
                     since.as_deref(),
+                    artifact,
                 )
                 .await
             {
@@ -669,6 +677,12 @@ impl Agent {
             }
             if let Some(value) = sample.players_max {
                 report.insert("players_max".into(), json!(value));
+            }
+            if let Some(value) = sample.disk_used_mb {
+                report.insert("disk_used_mb".into(), json!(value));
+            }
+            if let Some(value) = sample.artifact_present {
+                report.insert("artifact_present".into(), json!(value));
             }
             if !sample.logs.is_empty() {
                 let logs: Vec<Value> = sample

@@ -32,7 +32,9 @@ the Python agent — no master changes are required to run it side by side.
   the agent reports its assigned servers: status from `docker inspect` (missing → `OFFLINE`,
   running → `ONLINE`, exited 0 → `OFFLINE`, non-zero → `CRASHED`), CPU/memory from
   `docker stats --no-stream`, `players_max` from `server.properties` (`max-players`, default 20),
-  `players_online` from join/leave console lines, and new console lines from
+  `players_online` from join/leave console lines, `disk_used_mb` from a recursive walk of the
+  server directory (cached for five minutes, symlinks are never followed), `artifact_present`
+  from the jar name and minimum size the master lists in `artifacts`, and new console lines from
   `docker logs --timestamps` with a cursor persisted in the state volume (the first report sends a
   400-line backlog; after a restart only new lines are sent).
   Each report consumes a new sequence number, so the master never sees it as a replay.
@@ -75,7 +77,6 @@ the Python agent — no master changes are required to run it side by side.
 
 ## Not implemented yet
 
-Server disk usage (`disk_used_mb`) and artifact presence (`artifact_present`) are not reported yet.
 STOP sends SIGTERM to the JVM rather than Minecraft's own `stop` command over RCON; a server that
 needs an explicit save-on-stop gets the JVM shutdown hook only. A download larger than
 `CRAFTPILOT_MAX_UPLOAD_BYTES` is refused before anything is streamed.
