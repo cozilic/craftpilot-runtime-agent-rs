@@ -1,0 +1,7 @@
+target
+.agent-state
+.env
+.env.*
+!.env.example
+.git
+.github
