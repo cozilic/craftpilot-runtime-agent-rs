@@ -249,6 +249,125 @@ impl MasterClient {
         Ok(response)
     }
 
+    /// Migration relay: the lease identifies the command, the body is the
+    /// chunk ciphertext. Bodies stay under the master's 1 MiB + 16 limit.
+    pub async fn put_migration_manifest(
+        &self,
+        node_id: &str,
+        migration_id: &str,
+        command_id: &str,
+        lease_token: &str,
+        manifest: &Value,
+    ) -> Result<Value> {
+        let credential = self.credential.as_deref().ok_or(AgentError::Unauthorized)?;
+        let response = self
+            .http
+            .put(self.url(&format!(
+                "api/runtime/nodes/{node_id}/migrations/{migration_id}/manifest"
+            ))?)
+            .header("X-Migration-Command", command_id)
+            .header("X-Migration-Lease", lease_token)
+            .bearer_auth(credential)
+            .json(manifest)
+            .send()
+            .await?;
+        self.migration_response(response).await
+    }
+
+    pub async fn put_migration_chunk(
+        &self,
+        node_id: &str,
+        migration_id: &str,
+        command_id: &str,
+        lease_token: &str,
+        index: u64,
+        chunk: &[u8],
+    ) -> Result<Value> {
+        let credential = self.credential.as_deref().ok_or(AgentError::Unauthorized)?;
+        let response = self
+            .http
+            .put(self.url(&format!(
+                "api/runtime/nodes/{node_id}/migrations/{migration_id}/chunks/{index}"
+            ))?)
+            .header("X-Migration-Command", command_id)
+            .header("X-Migration-Lease", lease_token)
+            .header("Content-Type", "application/octet-stream")
+            .bearer_auth(credential)
+            .body(chunk.to_vec())
+            .send()
+            .await?;
+        self.migration_response(response).await
+    }
+
+    pub async fn get_migration_manifest(
+        &self,
+        node_id: &str,
+        migration_id: &str,
+        command_id: &str,
+        lease_token: &str,
+    ) -> Result<Value> {
+        let credential = self.credential.as_deref().ok_or(AgentError::Unauthorized)?;
+        let response = self
+            .http
+            .get(self.url(&format!(
+                "api/runtime/nodes/{node_id}/migrations/{migration_id}/manifest"
+            ))?)
+            .header("X-Migration-Command", command_id)
+            .header("X-Migration-Lease", lease_token)
+            .bearer_auth(credential)
+            .send()
+            .await?;
+        self.migration_response(response).await
+    }
+
+    pub async fn get_migration_chunk(
+        &self,
+        node_id: &str,
+        migration_id: &str,
+        command_id: &str,
+        lease_token: &str,
+        index: u64,
+    ) -> Result<Vec<u8>> {
+        let credential = self.credential.as_deref().ok_or(AgentError::Unauthorized)?;
+        let response = self
+            .http
+            .get(self.url(&format!(
+                "api/runtime/nodes/{node_id}/migrations/{migration_id}/chunks/{index}"
+            ))?)
+            .header("X-Migration-Command", command_id)
+            .header("X-Migration-Lease", lease_token)
+            .bearer_auth(credential)
+            .send()
+            .await?;
+        let status = response.status();
+        if status == StatusCode::UNAUTHORIZED {
+            return Err(AgentError::Unauthorized);
+        }
+        if !status.is_success() {
+            return Err(AgentError::Rejected {
+                status: status.as_u16(),
+                body: String::new(),
+            });
+        }
+        Ok(response.bytes().await?.to_vec())
+    }
+
+    async fn migration_response(&self, response: reqwest::Response) -> Result<Value> {
+        let status = response.status();
+        let body = response.text().await?;
+        match status {
+            StatusCode::UNAUTHORIZED => Err(AgentError::Unauthorized),
+            StatusCode::CONFLICT => Err(AgentError::Conflict(body)),
+            status if status.is_success() => {
+                serde_json::from_str::<Value>(&body).map_err(AgentError::from)
+            }
+            status => Err(AgentError::Rejected {
+                status: status.as_u16(),
+                body,
+            }),
+        }
+    }
+
     pub async fn acknowledge(
         &self,
         node_id: &str,

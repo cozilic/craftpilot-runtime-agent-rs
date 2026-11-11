@@ -9,6 +9,7 @@ use crate::config::Config;
 use crate::docker::Docker;
 use crate::error::{AgentError, Result};
 use crate::files::Files;
+use crate::migrations::Migrations;
 use crate::model::{AckRequest, Command};
 use crate::snapshot::Snapshotter;
 use crate::state::StateStore;
@@ -26,6 +27,7 @@ pub struct Agent {
     docker: Docker,
     snapshot: Snapshotter,
     files: Files,
+    migrations: Migrations,
 }
 
 impl Agent {
@@ -49,6 +51,11 @@ impl Agent {
             cfg.max_edit_bytes,
             cfg.max_upload_bytes,
         );
+        let migrations = Migrations::new(
+            cfg.server_data_root.clone(),
+            cfg.state_dir.clone(),
+            cfg.data_gid,
+        );
         Ok(Self {
             cfg,
             store,
@@ -56,6 +63,7 @@ impl Agent {
             docker,
             snapshot,
             files,
+            migrations,
         })
     }
 
@@ -297,6 +305,25 @@ impl Agent {
             "file_list" | "file_read" | "file_mutate" => {
                 return self.file_command(command).await;
             }
+            "migration_prepare"
+            | "migration_export"
+            | "migration_import"
+            | "migration_commit"
+            | "migration_delete_source" => {
+                return self.migration_command(command).await;
+            }
+            "migration_stop" => match self.docker.stop(&command.payload).await {
+                Ok(_) => (true, "MIGRATION_STOPPED".to_string(), None, None),
+                Err(err) => {
+                    warn!(command_id = %command.id, error = %err, "migration stop failed");
+                    (
+                        false,
+                        "RUNTIME_ERROR".to_string(),
+                        Some(ack_message(&err)),
+                        None,
+                    )
+                }
+            },
             "console" => match self.docker.console(&command.payload).await {
                 Ok(raw) => (
                     true,
@@ -434,6 +461,65 @@ impl Agent {
             result_code: result_code.to_string(),
             message: None,
             container_id: None,
+        }
+    }
+
+    /// Migrationer: destinationen skapar nycklar och importerar, källan
+    /// exporterar och raderar först efter masterns uttryckliga tillstånd.
+    async fn migration_command(&self, command: &Command) -> AckRequest {
+        let Some(node_id) = self.store.state().node_id.clone() else {
+            return failure(command, "the agent has no node id");
+        };
+
+        let outcome = match command.command_type.as_str() {
+            "migration_prepare" => self
+                .migrations
+                .prepare(&command.payload, &node_id)
+                .map(|key| ("MIGRATION_PREPARED", Some(key), None)),
+            "migration_export" => self
+                .migrations
+                .export(&command.payload, &node_id, &self.docker, &self.api, command)
+                .await
+                .map(|done| {
+                    (
+                        "MIGRATION_EXPORTED",
+                        Some(done.sha256),
+                        Some(done.bytes.to_string()),
+                    )
+                }),
+            "migration_import" => self
+                .migrations
+                .import(&command.payload, &node_id, &self.api, command)
+                .await
+                .map(|done| {
+                    (
+                        "MIGRATION_STAGED",
+                        Some(done.sha256),
+                        Some(done.bytes.to_string()),
+                    )
+                }),
+            "migration_commit" => self
+                .migrations
+                .commit(&command.payload, &node_id)
+                .map(|_| ("MIGRATION_COMMITTED", None, None)),
+            _ => self
+                .migrations
+                .delete_source(&command.payload, &node_id)
+                .map(|_| ("MIGRATION_SOURCE_DELETED", None, None)),
+        };
+
+        match outcome {
+            Ok((result_code, message, container_id)) => AckRequest {
+                lease_token: command.lease_token.clone(),
+                success: true,
+                result_code: result_code.to_string(),
+                message,
+                container_id,
+            },
+            Err(err) => {
+                warn!(command_id = %command.id, error = %err, "migration command failed");
+                failure(command, &ack_message(&err))
+            }
         }
     }
 

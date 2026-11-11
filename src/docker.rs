@@ -256,6 +256,13 @@ impl Docker {
         args
     }
 
+    /// Migrationer kräver att källcontainern bevisligen inte kör innan
+    /// datan arkiveras. En saknad container räknas som stoppad.
+    pub async fn is_running(&self, server_id: &str) -> Result<bool> {
+        let name = container_name(server_id);
+        Ok(self.inspect(&name, "{{.State.Running}}").await?.as_deref() == Some("true"))
+    }
+
     async fn inspect(&self, name: &str, template: &str) -> Result<Option<String>> {
         let output = self
             .run_raw(&["inspect", "--format", template, name], 10)

@@ -5,9 +5,9 @@ built as a side project. The agent connects a trusted host to a CraftPilot maste
 Minecraft containers through the host's Docker daemon, and speaks the **same HTTP contract** as
 the Python agent — no master changes are required to run it side by side.
 
-> **Status: phase 5.** Enrollment, heartbeat, command claiming, acknowledgement, START, STOP, the
-> one-time initial SNAPSHOT, console commands and the file manager (list, read, mutations) work.
-> Migrations and file downloads are still acknowledged as `RUNTIME_ERROR`, so the panel shows a
+> **Status: phase 6.** Enrollment, heartbeat, command claiming, acknowledgement, START, STOP, the
+> one-time initial SNAPSHOT, console commands, the file manager and encrypted runtime-node
+> migrations work. File downloads are still acknowledged as `RUNTIME_ERROR`, so the panel shows a
 > failure instead of a silent lease.
 
 ## Implemented
@@ -29,6 +29,16 @@ the Python agent — no master changes are required to run it side by side.
 - **STOP** with the `force` flag: graceful `docker stop --time <grace>` otherwise
   `docker kill --signal=KILL`, answering `STOPPED` / `ALREADY_STOPPED`; a container that loses its
   labels is never touched.
+- **MIGRATIONS** (`migration_prepare`, `migration_stop`, `migration_export`, `migration_import`,
+  `migration_commit`, `migration_delete_source`): the destination creates an X25519 keypair and
+  keeps the private half in the agent state volume (`0600`); the source archives the server root,
+  derives an AES-256-GCM key with HKDF-SHA256 over the X25519 shared secret (protocol
+  `craftpilot-server-migration:v1`, salt and AAD bound to migration/source/destination), encrypts
+  in 1 MiB chunks with a `nonce_prefix || index` nonce and relays them through the master. The
+  destination downloads, decrypts and authenticates every chunk, verifies the archive SHA-256 and
+  byte count against the manifest, extracts with the snapshot's ZIP guards into a private staging
+  directory and only installs it into the server root on `migration_commit`. Source cleanup
+  requires a recorded export with the same digest; the server root is never touched otherwise.
 - **FILE MANAGER** (`file_list`, `file_read`, `file_mutate`): every path is normalised and then
   resolved against the server's sandbox root — no `..`, no absolute or drive-letter paths, no
   control characters, depth/segment/length limits, and the nearest existing ancestor is
@@ -58,7 +68,7 @@ the Python agent — no master changes are required to run it side by side.
 
 ## Not implemented yet
 
-File downloads (`file_download`, which streams a file back to the master) and migrations.
+File downloads (`file_download`, which streams a file back to the master).
   Telemetry/`servers/report` is not sent
   either, so a node running this agent appears online but reports no server data — the master
   therefore keeps a started server at `STARTING` until something else reports it. STOP sends

@@ -352,7 +352,7 @@ pub(crate) fn extract_zip(archive: &Path, target: &Path) -> Result<u64> {
 
 /// En ny serverkatalog ska vara skrivbar för spelcontainerns grupp (33),
 /// med setgid så filer som Minecraft skapar ärver gruppen.
-fn apply_shared_permissions(root: &Path, gid: u32) {
+pub(crate) fn apply_shared_permissions(root: &Path, gid: u32) {
     #[cfg(unix)]
     {
         let _ = std::process::Command::new("chown")

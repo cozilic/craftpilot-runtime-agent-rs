@@ -4,6 +4,7 @@ mod config;
 mod docker;
 mod error;
 mod files;
+mod migrations;
 mod model;
 mod snapshot;
 mod state;
