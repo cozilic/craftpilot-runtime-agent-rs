@@ -73,11 +73,12 @@ the Python agent — no master changes are required to run it side by side.
 - Signed-off configuration validation: HTTPS-only master origin with no path/query/credentials,
   poll interval 5–120 s, absolute data root, Docker network name, stop grace 0–45 s.
 
-## Not implemented yet  Server disk usage (`disk_used_mb`) and artifact presence (`artifact_present`) are not reported
-  yet. STOP
-  sends SIGTERM to the JVM rather than Minecraft's own `stop` command over RCON; a server that
-  needs an explicit save-on-stop gets the JVM shutdown hook only. A download larger than
-  `CRAFTPILOT_MAX_UPLOAD_BYTES` is refused before anything is streamed.
+## Not implemented yet
+
+Server disk usage (`disk_used_mb`) and artifact presence (`artifact_present`) are not reported yet.
+STOP sends SIGTERM to the JVM rather than Minecraft's own `stop` command over RCON; a server that
+needs an explicit save-on-stop gets the JVM shutdown hook only. A download larger than
+`CRAFTPILOT_MAX_UPLOAD_BYTES` is refused before anything is streamed.
 
 ## Configuration
 
