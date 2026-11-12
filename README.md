@@ -129,6 +129,14 @@ cargo build --release
 The Docker image is a multi-stage build: `rust:1-alpine` (musl) produces a static binary that is
 copied into `docker:27-cli`, because the agent needs the Docker CLI and must stay small.
 
+## Container image
+
+`.github/workflows/publish-image.yml` builds the Docker image on every pull request and
+smoke-tests it without pushing. Pushes to `main` publish `main` and `sha-<commit>` tags, and a
+stable semantic-version tag such as `v0.2.0` publishes `0.2.0`, `0.2`, `0`, `sha-<commit>` and
+`latest` to `ghcr.io/cozilic/craftpilot-runtime-agent-rs`. A manual run requires an explicit
+version and publishes that tag plus the commit tag.
+
 START/STOP require the Docker socket, the game network and the server data root:
 
 ```sh
