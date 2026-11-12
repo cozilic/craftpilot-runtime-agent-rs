@@ -5,6 +5,8 @@ built as a side project. The agent connects a trusted host to a CraftPilot maste
 Minecraft containers through the host's Docker daemon, and speaks the **same HTTP contract** as
 the Python agent — no master changes are required to run it side by side.
 
+> **Svensk driftsättningsguide för nodägare:** [GUIDE.sv.md](GUIDE.sv.md)
+
 > **Status: phase 7.** Enrollment, heartbeat, command claiming, acknowledgement, START, STOP over
 > RCON, the one-time initial SNAPSHOT, console commands, the file manager, encrypted runtime-node
 > migrations and server telemetry work, and file downloads stream to the master.
@@ -130,6 +132,13 @@ The Docker image is a multi-stage build: `rust:1-alpine` (musl) produces a stati
 copied into `docker:27-cli`, because the agent needs the Docker CLI and must stay small.
 
 ## Container image
+
+### Install on a node
+
+Copy `setup.sh` and `compose.yaml` to the node and run `sudo ./setup.sh`. The script creates the
+required directories and Docker network, writes `.env`, pulls the image and prints the claim code.
+For Docker Desktop on macOS or Windows, use `compose.desktop.yaml`; see
+[GUIDE.sv.md](GUIDE.sv.md) for the full walkthrough.
 
 `.github/workflows/publish-image.yml` builds the Docker image on every pull request and
 smoke-tests it without pushing. Pushes to `main` publish `main` and `sha-<commit>` tags, and a
