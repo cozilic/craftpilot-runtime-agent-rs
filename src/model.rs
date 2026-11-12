@@ -11,6 +11,11 @@ use serde::{Deserialize, Serialize};
 pub struct EnrollmentCreated {
     pub request_id: String,
     pub request_secret: String,
+    /// Engångskod som ägaren anger i panelen (2026-11-12).
+    #[serde(default)]
+    pub claim_code: Option<String>,
+    #[serde(default)]
+    pub claim_expires_at: Option<String>,
     #[serde(default)]
     pub poll_interval_seconds: u64,
     #[serde(default)]

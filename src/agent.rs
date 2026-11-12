@@ -142,8 +142,18 @@ impl Agent {
                 info!(
                     request_id = %created.request_id,
                     expires_at = %created.expires_at,
-                    "filed an enrollment request — approve it under Ops & log → Runtime nodes"
+                    "filed an enrollment request — link it under My node in CraftPilot"
                 );
+                if let Some(code) = created.claim_code.as_deref() {
+                    let expires_at = created.claim_expires_at.as_deref().unwrap_or("");
+                    self.store
+                        .write_identity_file(code, &created.request_id, expires_at)?;
+                    info!(
+                        claim_code = %code,
+                        claim_expires_at = %expires_at,
+                        "enter this claim code under My node in CraftPilot (also saved in identity.conf)"
+                    );
+                }
                 let enrollment = created.into_enrollment();
                 self.store.state_mut().enrollment = Some(enrollment.clone());
                 self.store.save()?;

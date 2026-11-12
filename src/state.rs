@@ -105,6 +105,36 @@ impl StateStore {
         self.save()
     }
 
+    /// Skriver `identity.conf` med claim-koden (2026-11-12) så att ägaren
+    /// kan läsa den igen utan att scrolla i terminalen. Filen är 0600 och
+    /// innehåller inget credential — bara engångskoden och ärendets id.
+    pub fn write_identity_file(
+        &self,
+        claim_code: &str,
+        request_id: &str,
+        expires_at: &str,
+    ) -> Result<()> {
+        let path = self.dir.join("identity.conf");
+        let temporary = self.dir.join("identity.conf.tmp");
+        let contents = format!(
+            "# CraftPilot node identity — enter the code in the panel under My node.\n\
+             # The code is single-use and expires; restart the agent for a new one.\n\
+             CRAFTPILOT_CLAIM_CODE={claim_code}\n\
+             CRAFTPILOT_REQUEST_ID={request_id}\n\
+             CRAFTPILOT_CLAIM_EXPIRES_AT={expires_at}\n"
+        );
+
+        {
+            let mut file = fs::File::create(&temporary)?;
+            restrict_permissions(&temporary, 0o600)?;
+            file.write_all(contents.as_bytes())?;
+            file.sync_all()?;
+        }
+
+        fs::rename(&temporary, &path)?;
+        Ok(())
+    }
+
     pub fn save(&self) -> Result<()> {
         let path = self.dir.join("state.json");
         let temporary = self.dir.join("state.json.tmp");
@@ -201,6 +231,32 @@ mod tests {
             StateStore::open(&dir).unwrap().log_cursor("server-1"),
             Some("2026-11-11T22:00:01Z")
         );
+
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn identity_file_holds_the_claim_code_and_stays_private() {
+        let dir = temporary_dir("identity");
+        let store = StateStore::open(&dir).unwrap();
+        store
+            .write_identity_file("CP-ABCDE-FGHJK", "request-1", "2026-11-12T12:00:00Z")
+            .unwrap();
+
+        let contents = fs::read_to_string(dir.join("identity.conf")).unwrap();
+        assert!(contents.contains("CRAFTPILOT_CLAIM_CODE=CP-ABCDE-FGHJK"));
+        assert!(contents.contains("CRAFTPILOT_REQUEST_ID=request-1"));
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = fs::metadata(dir.join("identity.conf"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777;
+            assert_eq!(mode, 0o600);
+        }
 
         fs::remove_dir_all(&dir).unwrap();
     }
