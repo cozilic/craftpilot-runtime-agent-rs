@@ -20,9 +20,8 @@ pub struct AgentState {
     pub enrollment: Option<Enrollment>,
     #[serde(default)]
     pub heartbeat_sequence: u64,
-    /// Reserved for the console path (RCON password per server). Kept in the
-    /// format now so the state file does not need a migration later.
-    #[allow(dead_code)]
+    /// Per-server RCON-lösenord (samma fält som Python-agenten). Skapas vid
+    /// första starten och används av STOP; filen är 0600.
     #[serde(default)]
     pub rcon_passwords: BTreeMap<String, String>,
     /// Senaste loggtidsstämpeln som rapporterats per server. Sparas så en

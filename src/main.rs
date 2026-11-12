@@ -6,6 +6,7 @@ mod error;
 mod files;
 mod migrations;
 mod model;
+mod rcon;
 mod snapshot;
 mod state;
 mod telemetry;

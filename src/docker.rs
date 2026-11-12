@@ -1,14 +1,15 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::{Output, Stdio};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde_json::Value;
 use tokio::process::Command as ProcessCommand;
-use tokio::time::timeout;
+use tokio::time::{sleep, timeout};
 use tracing::{info, warn};
 
 use crate::error::{AgentError, Result};
+use crate::rcon::{self, RconSettings};
 
 const CONTAINER_PREFIX: &str = "craftpilot-";
 const MOUNT_PORT: u16 = 25565;
@@ -64,7 +65,14 @@ impl Docker {
         }
     }
 
-    pub async fn start(&self, payload: &Value) -> Result<StartOutcome> {
+    /// `rcon_password` sätts bara för Java-containrar: agenten slår på RCON
+    /// i server.properties innan start så ett senare STOP kan be spelet
+    /// stänga av sig självt.
+    pub async fn start(
+        &self,
+        payload: &Value,
+        rcon_password: Option<&str>,
+    ) -> Result<StartOutcome> {
         let server_id = server_id(payload)?;
         let expected_name = container_name(&server_id);
         let spec = ContainerSpec::parse(payload, &expected_name)?;
@@ -87,6 +95,15 @@ impl Docker {
 
         let (data_dir, created) = self.ensure_data_dir(&server_id)?;
         self.chown_new_directory(&data_dir, &spec.container_user, created);
+
+        // Efter chown så filen får spelcontainerns ägare. Ett fel här får
+        // inte stoppa starten — servern körs då utan RCON och STOP faller
+        // tillbaka på SIGTERM.
+        if let (true, Some(password)) = (spec.is_java(), rcon_password) {
+            if let Err(err) = rcon::configure(&data_dir, password) {
+                warn!(server_id = %server_id, error = %err, "could not enable rcon");
+            }
+        }
         let mount = self.host_data_path(&server_id, &data_dir);
 
         match self.inspect(&expected_name, "{{.State.Running}}").await? {
@@ -141,10 +158,15 @@ impl Docker {
         })
     }
 
-    /// Utan RCON skickar vi SIGTERM via `docker stop` (JVM:ens shutdown hook
-    /// sparar världen) och faller tillbaka på SIGKILL först när `force` är
-    /// satt eller masterns tidsgräns redan har passerat.
-    pub async fn stop(&self, payload: &Value) -> Result<StopOutcome> {
+    /// Först Minecrafts eget `stop` över RCON, så världen sparas och spelare
+    /// kopplas ned städat. Saknas RCON, avvisas lösenordet eller stannar
+    /// servern inte inom tidsgränsen går vi vidare till `docker stop`
+    /// (SIGTERM), och `force` skickar SIGKILL direkt.
+    pub async fn stop(
+        &self,
+        payload: &Value,
+        rcon_settings: Option<&RconSettings>,
+    ) -> Result<StopOutcome> {
         let server_id = server_id(payload)?;
         let name = container_name(&server_id);
         let force = payload
@@ -176,6 +198,25 @@ impl Docker {
             warn!(server_id = %server_id, "server_force_stop_requested");
             self.run(&["kill", "--signal=KILL", &name], 15).await?;
         } else {
+            if let Some(settings) = rcon_settings {
+                info!(server_id = %server_id, "server_rcon_stop_requested");
+                match rcon::send_stop(&name, settings.port, &settings.password).await {
+                    Ok(()) => {
+                        let limit = Duration::from_secs(self.stop_grace_seconds);
+                        if self.wait_until_stopped(&name, limit).await? {
+                            info!(server_id = %server_id, "server_stopped_via_rcon");
+                            return Ok(StopOutcome {
+                                already_stopped: false,
+                            });
+                        }
+                        warn!(server_id = %server_id, "server_rcon_stop_did_not_exit");
+                    }
+                    Err(err) => {
+                        warn!(server_id = %server_id, error = %err, "server_rcon_stop_failed");
+                    }
+                }
+            }
+
             info!(server_id = %server_id, "server_graceful_stop_requested");
             let grace = self.stop_grace_seconds.to_string();
             self.run(
@@ -195,6 +236,21 @@ impl Docker {
         Ok(StopOutcome {
             already_stopped: false,
         })
+    }
+
+    /// Väntar på att containern lämnar `running`. RCON-stop är asynkront:
+    /// spelet svarar innan det har hunnit spara klart och avsluta.
+    async fn wait_until_stopped(&self, name: &str, limit: Duration) -> Result<bool> {
+        let deadline = Instant::now() + limit;
+        loop {
+            if self.inspect(name, "{{.State.Running}}").await?.as_deref() != Some("true") {
+                return Ok(true);
+            }
+            if Instant::now() >= deadline {
+                return Ok(false);
+            }
+            sleep(Duration::from_millis(500)).await;
+        }
     }
 
     /// Skriver en rad till spelets konsol-FIFO — samma argv-form som masterns
@@ -529,6 +585,16 @@ struct ContainerSpec {
 }
 
 impl ContainerSpec {
+    /// Bara Java-servern har `server.properties`; Pumpkin styrs via TOML och
+    /// får behålla SIGTERM-vägen.
+    fn is_java(&self) -> bool {
+        // Mastern wrappar startkommandot i `sh -c "cd …; exec 'java' …"`, så
+        // java och jar-namnet kan ligga inbäddade i ett enda argv-element.
+        self.command
+            .iter()
+            .any(|arg| arg.contains("java") || arg.contains(".jar"))
+    }
+
     fn parse(payload: &Value, expected_name: &str) -> Result<Self> {
         let container = payload
             .get("container")

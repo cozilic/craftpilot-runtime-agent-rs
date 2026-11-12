@@ -12,6 +12,7 @@ use crate::error::{AgentError, Result};
 use crate::files::Files;
 use crate::migrations::Migrations;
 use crate::model::{AckRequest, Command};
+use crate::rcon;
 use crate::snapshot::Snapshotter;
 use crate::state::StateStore;
 use crate::telemetry::{Artifact, Reporter};
@@ -299,32 +300,80 @@ impl Agent {
         }
     }
 
+    /// STOP går först över RCON (Minecrafts eget `stop`), med `docker stop`
+    /// som fallback. Migrationer använder samma väg så en källserver alltid
+    /// stängs av städat innan datan arkiveras.
+    async fn stop_server(&self, payload: &Value) -> Result<crate::docker::StopOutcome> {
+        let settings = self.rcon_settings(payload);
+        self.docker.stop(payload, settings.as_ref()).await
+    }
+
+    /// Lösenordet skapas en gång per Java-server och sparas i state-filen
+    /// (0600). Ett state-fel får inte stoppa en start — då kör servern utan
+    /// RCON och STOP använder SIGTERM som vanligt.
+    fn ensure_rcon_password(&mut self, payload: &Value) -> Option<String> {
+        let server_id = crate::docker::server_id(payload).ok()?;
+        if !rcon::payload_is_java(payload) {
+            return None;
+        }
+        if let Some(password) = self.store.state().rcon_passwords.get(&server_id) {
+            return Some(password.clone());
+        }
+
+        let password = rcon::generate_password();
+        self.store
+            .state_mut()
+            .rcon_passwords
+            .insert(server_id.clone(), password.clone());
+        if let Err(err) = self.store.save() {
+            warn!(server_id = %server_id, error = %err, "could not persist the rcon password");
+            return None;
+        }
+        info!(server_id = %server_id, "generated an rcon password");
+        Some(password)
+    }
+
+    fn rcon_settings(&self, payload: &Value) -> Option<rcon::RconSettings> {
+        let server_id = crate::docker::server_id(payload).ok()?;
+        let password = self.store.state().rcon_passwords.get(&server_id)?.clone();
+        let port =
+            rcon::read_port(&self.cfg.server_data_root.join(&server_id)).unwrap_or(rcon::RCON_PORT);
+        Some(rcon::RconSettings { port, password })
+    }
+
     /// Kör START/STOP via Docker. Övriga operationer ackas ärligt som
     /// RUNTIME_ERROR så att masterns kö aldrig fastnar på en död lease.
-    async fn execute(&self, command: &Command) -> AckRequest {
+    async fn execute(&mut self, command: &Command) -> AckRequest {
         let (success, result_code, message, container_id) = match command.command_type.as_str() {
-            "start" => match self.docker.start(&command.payload).await {
-                Ok(outcome) => (
-                    true,
-                    if outcome.already_running {
-                        "ALREADY_RUNNING"
-                    } else {
-                        "STARTED"
-                    }
-                    .to_string(),
-                    None,
-                    Some(outcome.container_id),
-                ),
-                Err(err) => {
-                    warn!(command_id = %command.id, error = %err, "start failed");
-                    (
-                        false,
-                        "RUNTIME_ERROR".to_string(),
-                        Some(ack_message(&err)),
+            "start" => {
+                let password = self.ensure_rcon_password(&command.payload);
+                match self
+                    .docker
+                    .start(&command.payload, password.as_deref())
+                    .await
+                {
+                    Ok(outcome) => (
+                        true,
+                        if outcome.already_running {
+                            "ALREADY_RUNNING"
+                        } else {
+                            "STARTED"
+                        }
+                        .to_string(),
                         None,
-                    )
+                        Some(outcome.container_id),
+                    ),
+                    Err(err) => {
+                        warn!(command_id = %command.id, error = %err, "start failed");
+                        (
+                            false,
+                            "RUNTIME_ERROR".to_string(),
+                            Some(ack_message(&err)),
+                            None,
+                        )
+                    }
                 }
-            },
+            }
             "file_list" | "file_read" | "file_mutate" => {
                 return self.file_command(command).await;
             }
@@ -336,7 +385,7 @@ impl Agent {
             | "migration_delete_source" => {
                 return self.migration_command(command).await;
             }
-            "migration_stop" => match self.docker.stop(&command.payload).await {
+            "migration_stop" => match self.stop_server(&command.payload).await {
                 Ok(_) => (true, "MIGRATION_STOPPED".to_string(), None, None),
                 Err(err) => {
                     warn!(command_id = %command.id, error = %err, "migration stop failed");
@@ -395,7 +444,7 @@ impl Agent {
                     ),
                 }
             }
-            "stop" => match self.docker.stop(&command.payload).await {
+            "stop" => match self.stop_server(&command.payload).await {
                 Ok(outcome) => (
                     true,
                     if outcome.already_stopped {

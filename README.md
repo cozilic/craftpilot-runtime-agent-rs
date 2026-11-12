@@ -5,9 +5,9 @@ built as a side project. The agent connects a trusted host to a CraftPilot maste
 Minecraft containers through the host's Docker daemon, and speaks the **same HTTP contract** as
 the Python agent — no master changes are required to run it side by side.
 
-> **Status: phase 7.** Enrollment, heartbeat, command claiming, acknowledgement, START, STOP, the
-> one-time initial SNAPSHOT, console commands, the file manager, encrypted runtime-node migrations
-> and server telemetry work, and file downloads stream to the master.
+> **Status: phase 7.** Enrollment, heartbeat, command claiming, acknowledgement, START, STOP over
+> RCON, the one-time initial SNAPSHOT, console commands, the file manager, encrypted runtime-node
+> migrations and server telemetry work, and file downloads stream to the master.
 
 ## Implemented
 
@@ -25,9 +25,12 @@ the Python agent — no master changes are required to run it side by side.
   `<data root>/<server uuid>` at the spec's mount path, and runs `docker run` with a fixed argv
   (`--memory`, `--memory-swap`, `--cpus`, `--restart no`, `--user`, `--publish <port>:25565/tcp`).
   START is idempotent and answers `ALREADY_RUNNING` when the container already runs.
-- **STOP** with the `force` flag: graceful `docker stop --time <grace>` otherwise
-  `docker kill --signal=KILL`, answering `STOPPED` / `ALREADY_STOPPED`; a container that loses its
-  labels is never touched.
+- **STOP** asks Minecraft itself to shut down: START enables RCON in `server.properties` with a
+  random per-server password persisted in the agent state (never published, reachable only on the
+  isolated Docker network), and STOP sends `stop` over RCON, then waits for the container to exit.
+  Servers without RCON (Pumpkin, a missing properties file, a rejected password or a timeout) fall
+  back to `docker stop --time <grace>` (SIGTERM) and `force` sends SIGKILL immediately, answering
+  `STOPPED` / `ALREADY_STOPPED`; a container that loses its labels is never touched.
 - **TELEMETRY** (`servers` + `servers/report`): every 30 s, and immediately after a start/stop,
   the agent reports its assigned servers: status from `docker inspect` (missing → `OFFLINE`,
   running → `ONLINE`, exited 0 → `OFFLINE`, non-zero → `CRASHED`), CPU/memory from
@@ -77,9 +80,7 @@ the Python agent — no master changes are required to run it side by side.
 
 ## Not implemented yet
 
-STOP sends SIGTERM to the JVM rather than Minecraft's own `stop` command over RCON; a server that
-needs an explicit save-on-stop gets the JVM shutdown hook only. A download larger than
-`CRAFTPILOT_MAX_UPLOAD_BYTES` is refused before anything is streamed.
+A download larger than `CRAFTPILOT_MAX_UPLOAD_BYTES` is refused before anything is streamed.
 
 ## Configuration
 
