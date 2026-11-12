@@ -30,6 +30,8 @@ pub struct Sample {
     pub cpu_percent: Option<f64>,
     pub memory_used_mb: Option<u64>,
     pub memory_limit_mb: Option<u64>,
+    /// Sekunder sedan containern startade (endast ONLINE).
+    pub uptime_seconds: Option<u64>,
     pub players_online: Option<i64>,
     pub players_max: Option<i64>,
     pub disk_used_mb: Option<u64>,
@@ -68,6 +70,17 @@ impl Reporter {
         } else {
             None
         };
+        let uptime_seconds = state
+            .as_ref()
+            .filter(|state| state.running)
+            .and_then(|state| state.started_at_epoch)
+            .and_then(|started| {
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .ok()?
+                    .as_secs() as i64;
+                u64::try_from(now - started).ok()
+            });
 
         let server_root = data_root.join(server_id);
         let disk_used_mb = self.disk_usage(server_id, &server_root).await;
@@ -98,6 +111,7 @@ impl Reporter {
             cpu_percent: stats.as_ref().and_then(|stats| stats.cpu_percent),
             memory_used_mb: stats.as_ref().and_then(|stats| stats.memory_used_mb),
             memory_limit_mb: stats.as_ref().and_then(|stats| stats.memory_limit_mb),
+            uptime_seconds,
             players_online: self.players.get(server_id).copied(),
             players_max: max_players(data_root, server_id),
             disk_used_mb,

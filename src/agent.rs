@@ -854,6 +854,9 @@ impl Agent {
             if let Some(value) = sample.memory_limit_mb {
                 report.insert("memory_limit_mb".into(), json!(value));
             }
+            if let Some(value) = sample.uptime_seconds {
+                report.insert("uptime_seconds".into(), json!(value));
+            }
             if let Some(value) = sample.players_online {
                 report.insert("players_online".into(), json!(value));
             }
