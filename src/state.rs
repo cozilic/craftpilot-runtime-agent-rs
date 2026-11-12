@@ -135,6 +135,20 @@ impl StateStore {
         Ok(())
     }
 
+    pub fn identity_file_path(&self) -> PathBuf {
+        self.dir.join("identity.conf")
+    }
+
+    /// Tar bort identity.conf när noden är kopplad: en gammal kod ska inte
+    /// ligga kvar och se giltig ut i en backup eller på en skärmbild.
+    pub fn clear_identity_file(&self) -> Result<()> {
+        match fs::remove_file(self.identity_file_path()) {
+            Ok(()) => Ok(()),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(err) => Err(err.into()),
+        }
+    }
+
     pub fn save(&self) -> Result<()> {
         let path = self.dir.join("state.json");
         let temporary = self.dir.join("state.json.tmp");
@@ -257,6 +271,11 @@ mod tests {
                 & 0o777;
             assert_eq!(mode, 0o600);
         }
+
+        store.clear_identity_file().unwrap();
+        assert!(!dir.join("identity.conf").exists());
+        // Idempotent: en redan borta fil är inget fel.
+        store.clear_identity_file().unwrap();
 
         fs::remove_dir_all(&dir).unwrap();
     }

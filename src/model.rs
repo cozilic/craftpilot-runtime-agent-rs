@@ -32,6 +32,13 @@ impl EnrollmentCreated {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct ClaimCodeResponse {
+    pub claim_code: String,
+    #[serde(default)]
+    pub claim_expires_at: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct EnrollmentPoll {
     pub status: String,
     #[serde(default)]

@@ -116,6 +116,23 @@ impl MasterClient {
             .await
     }
 
+    /// Ny claim-kod för en anmälan som fortfarande väntar. Används vid
+    /// start med ett sparat ärende, så koden i terminalen alltid är giltig.
+    pub async fn refresh_claim_code(
+        &self,
+        request_id: &str,
+        request_secret: &str,
+    ) -> Result<crate::model::ClaimCodeResponse> {
+        let body = serde_json::json!({ "request_secret": request_secret });
+        self.request(
+            Method::POST,
+            &format!("api/runtime/enrollments/{request_id}/claim-code"),
+            Some(&body),
+            false,
+        )
+        .await
+    }
+
     pub async fn poll_enrollment(
         &self,
         request_id: &str,

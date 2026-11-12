@@ -131,9 +131,50 @@ impl Agent {
         Ok(())
     }
 
+    /// Skriver identity.conf och skriver ut koden så den syns i terminalen.
+    async fn announce_claim_code(
+        &mut self,
+        claim_code: &str,
+        request_id: &str,
+        expires_at: &str,
+    ) -> Result<()> {
+        self.store
+            .write_identity_file(claim_code, request_id, expires_at)?;
+        info!(
+            claim_code = %claim_code,
+            claim_expires_at = %expires_at,
+            identity_file = %self.store.identity_file_path().display(),
+            "enter this claim code under My node in CraftPilot (also saved in identity.conf)"
+        );
+        Ok(())
+    }
+
     async fn self_enroll(&mut self) -> Result<()> {
         let mut enrollment = match self.store.state().enrollment.clone() {
-            Some(saved) => saved,
+            Some(saved) => {
+                // Ny start med ett sparat ärende: förnya koden så den som
+                // ligger i terminalen/identity.conf alltid är giltig.
+                match self
+                    .api
+                    .refresh_claim_code(&saved.request_id, &saved.request_secret)
+                    .await
+                {
+                    Ok(refreshed) => {
+                        self.announce_claim_code(
+                            &refreshed.claim_code,
+                            &saved.request_id,
+                            refreshed.claim_expires_at.as_deref().unwrap_or(""),
+                        )
+                        .await?;
+                    }
+                    Err(err) => warn!(
+                        error = %err,
+                        request_id = %saved.request_id,
+                        "could not refresh the claim code; keeping the saved enrollment"
+                    ),
+                }
+                saved
+            }
             None => {
                 let created = self
                     .api
@@ -144,15 +185,13 @@ impl Agent {
                     expires_at = %created.expires_at,
                     "filed an enrollment request — link it under My node in CraftPilot"
                 );
-                if let Some(code) = created.claim_code.as_deref() {
-                    let expires_at = created.claim_expires_at.as_deref().unwrap_or("");
-                    self.store
-                        .write_identity_file(code, &created.request_id, expires_at)?;
-                    info!(
-                        claim_code = %code,
-                        claim_expires_at = %expires_at,
-                        "enter this claim code under My node in CraftPilot (also saved in identity.conf)"
-                    );
+                if let Some(code) = created.claim_code.clone() {
+                    self.announce_claim_code(
+                        &code,
+                        &created.request_id,
+                        created.claim_expires_at.as_deref().unwrap_or(""),
+                    )
+                    .await?;
                 }
                 let enrollment = created.into_enrollment();
                 self.store.state_mut().enrollment = Some(enrollment.clone());
@@ -193,6 +232,10 @@ impl Agent {
                         .await?;
                     self.store.state_mut().enrollment = None;
                     self.store.save()?;
+                    // Koden är förbrukad: ta bort den från disk.
+                    if let Err(err) = self.store.clear_identity_file() {
+                        warn!(error = %err, "could not remove the used identity.conf");
+                    }
 
                     info!(node_id = %node_id, "enrollment completed");
                     return Ok(());
@@ -222,6 +265,14 @@ impl Agent {
                         .create_enrollment(&self.cfg.hostname, &self.cfg.agent_version)
                         .await?;
                     info!(request_id = %created.request_id, "filed a replacement enrollment request");
+                    if let Some(code) = created.claim_code.clone() {
+                        self.announce_claim_code(
+                            &code,
+                            &created.request_id,
+                            created.claim_expires_at.as_deref().unwrap_or(""),
+                        )
+                        .await?;
+                    }
                     enrollment = created.into_enrollment();
                     self.store.state_mut().enrollment = Some(enrollment.clone());
                     self.store.save()?;
