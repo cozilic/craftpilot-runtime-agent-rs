@@ -1,0 +1,28 @@
+name: craftpilot-agent-desktop
+
+services:
+  agent:
+    image: ghcr.io/cozilic/craftpilot-runtime-agent-rs:main
+    container_name: craftpilot-runtime-agent-rs
+    restart: unless-stopped
+    env_file:
+      - .env.desktop
+    volumes:
+      # Docker Desktop must expose its default socket to Linux containers.
+      - /var/run/docker.sock:/var/run/docker.sock
+      # The host path is shared by Docker Desktop and mounted at the path the
+      # agent uses internally. Set it in .env.desktop.
+      - type: bind
+        source: ${CRAFTPILOT_HOST_DATA_DIR:?set CRAFTPILOT_HOST_DATA_DIR in .env.desktop}
+        target: /srv/craftpilot/servers
+      - agent_state:/var/lib/craftpilot-agent
+    networks:
+      - craftpilot-servers
+
+networks:
+  craftpilot-servers:
+    external: true
+
+volumes:
+  agent_state:
+    name: craftpilot_rs_agent_state

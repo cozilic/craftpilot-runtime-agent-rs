@@ -1,0 +1,23 @@
+name: craftpilot-agent
+
+services:
+  agent:
+    image: ghcr.io/cozilic/craftpilot-runtime-agent-rs:main
+    container_name: craftpilot-runtime-agent-rs
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /srv/craftpilot/servers:/srv/craftpilot/servers
+      - agent_state:/var/lib/craftpilot-agent
+    networks:
+      - craftpilot-servers
+
+networks:
+  craftpilot-servers:
+    external: true
+
+volumes:
+  agent_state:
+    name: craftpilot_rs_agent_state
