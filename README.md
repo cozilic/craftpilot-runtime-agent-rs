@@ -7,7 +7,8 @@ the Python agent — no master changes are required to run it side by side.
 
 > **Status: phase 7.** Enrollment, heartbeat, command claiming, acknowledgement, START, STOP over
 > RCON, the one-time initial SNAPSHOT, console commands, the file manager, encrypted runtime-node
-> migrations and server telemetry work, and file downloads stream to the master.
+> migrations and server telemetry work, file downloads stream to the master, and the remote file
+> tree is indexed and synced in bounded batches.
 
 ## Implemented
 
@@ -61,6 +62,10 @@ the Python agent — no master changes are required to run it side by side.
   symlink, ratio and size guards) and `upload` (streamed from the master with the lease, checked
   against the declared byte count and SHA-256). Results are posted to the master's
   `commands/{id}/result` endpoint **before** the ack, which is where the master reads them.
+  A persistent directory index (`file-tree-index.json`, `0600` in the state volume) keeps the
+  master's remote file-tree cache fresh: agent mutations invalidate the affected directory, the
+  index is rescanned every 30 seconds for changes made directly on the host, and deltas are sent
+  in batches of 20 to `/file-tree` with progress reported to `/file-tree/progress`.
 - **CONSOLE**: writes one attributed line to the game's console FIFO with the same argv shape as
   the master's own Docker adapter (`docker exec <name> sh -c 'printf … > /tmp/.craftpilot-console'
   sh <command>`), so the command is never interpolated into a shell script. Requires the container
@@ -118,6 +123,8 @@ Approve the logged request ID in **Ops & log → Runtime nodes**. Delete `.agent
 again (it holds the credential).
 
 ## Build and test
+
+Rust 1.88 or newer is required by the locked dependency set.
 
 ```sh
 cargo fmt --check

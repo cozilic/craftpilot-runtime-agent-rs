@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
@@ -9,6 +11,7 @@ use crate::api::MasterClient;
 use crate::config::Config;
 use crate::docker::Docker;
 use crate::error::{AgentError, Result};
+use crate::file_tree::{FileTreeIndex, SYNC_BATCH};
 use crate::files::Files;
 use crate::migrations::Migrations;
 use crate::model::{AckRequest, Command};
@@ -30,9 +33,12 @@ pub struct Agent {
     docker: Docker,
     snapshot: Snapshotter,
     files: Files,
+    file_tree: Arc<FileTreeIndex>,
     migrations: Migrations,
     reporter: Reporter,
     last_report: Option<Instant>,
+    assigned_servers: BTreeSet<String>,
+    last_file_tree_progress: Option<String>,
 }
 
 impl Agent {
@@ -56,6 +62,10 @@ impl Agent {
             cfg.max_edit_bytes,
             cfg.max_upload_bytes,
         );
+        let file_tree = Arc::new(FileTreeIndex::new(
+            cfg.server_data_root.clone(),
+            cfg.state_dir.clone(),
+        ));
         let migrations = Migrations::new(
             cfg.server_data_root.clone(),
             cfg.state_dir.clone(),
@@ -68,13 +78,17 @@ impl Agent {
             docker,
             snapshot,
             files,
+            file_tree,
             migrations,
             reporter: Reporter::new(),
             last_report: None,
+            assigned_servers: BTreeSet::new(),
+            last_file_tree_progress: None,
         })
     }
 
     pub async fn run(mut self) -> Result<()> {
+        self.file_tree.start();
         self.ensure_credentialed().await?;
         self.handshake().await?;
         self.main_loop().await
@@ -328,9 +342,13 @@ impl Agent {
         let report_due = self
             .last_report
             .is_none_or(|at| at.elapsed() >= Duration::from_secs(30));
-        if report_due {
-            self.report_servers().await;
-        }
+        let assigned = if report_due {
+            self.report_servers().await
+        } else {
+            self.assigned_servers.clone()
+        };
+        self.file_tree.set_assigned(&assigned);
+        self.sync_file_tree(&assigned).await;
 
         let Some(command) = claim.command else {
             return Ok(());
@@ -589,6 +607,13 @@ impl Agent {
             return failure(command, &ack_message(&err));
         }
 
+        if command.command_type == "file_mutate" {
+            if let Some(server_id) = command.server_id() {
+                self.file_tree
+                    .invalidate_after_mutation(server_id, &command.payload);
+            }
+        }
+
         AckRequest {
             lease_token: command.lease_token.clone(),
             success: true,
@@ -713,24 +738,66 @@ impl Agent {
         }
     }
 
+    /// Håller masterns filcache uppdaterad. En full återscanning sker vid
+    /// start, när tilldelningen ändras och sedan var 30:e sekund; egna
+    /// mutationer invaliderar bara den berörda katalogen.
+    async fn sync_file_tree(&mut self, assigned: &BTreeSet<String>) {
+        let Some(node_id) = self.store.state().node_id.clone() else {
+            return;
+        };
+        let index = Arc::clone(&self.file_tree);
+        let stage = index.progress();
+        if self.last_file_tree_progress.as_deref() != Some(stage.as_str()) {
+            match self.api.report_file_tree_progress(&node_id, &stage).await {
+                Ok(_) => self.last_file_tree_progress = Some(stage),
+                Err(err) => warn!(error = %err, "reporting file tree progress failed"),
+            }
+        }
+
+        loop {
+            let pending = index.pending_updates(assigned, SYNC_BATCH);
+            if pending.is_empty() {
+                break;
+            }
+            let directories = pending
+                .iter()
+                .map(|update| update.payload.clone())
+                .collect::<Vec<_>>();
+            let payload = json!({ "directories": directories });
+            match self.api.sync_file_tree(&node_id, &payload).await {
+                Ok(_) => index.acknowledge(&pending),
+                Err(err) => {
+                    warn!(error = %err, "syncing the file tree failed; keeping the delta for retry");
+                    break;
+                }
+            }
+        }
+    }
+
     /// Rapporterar status, containerdata, spelare och nya konsolrader för
     /// varje server som mastern tilldelat noden. Varje rapport konsumerar
     /// ett nytt sekvensnummer (samma räknare som heartbeat/claim), annars
     /// avvisar mastern den som replay.
-    async fn report_servers(&mut self) {
+    async fn report_servers(&mut self) -> BTreeSet<String> {
         let Some(node_id) = self.store.state().node_id.clone() else {
-            return;
+            return self.assigned_servers.clone();
         };
         let listing = match self.api.servers(&node_id).await {
             Ok(listing) => listing,
             Err(err) => {
                 warn!(error = %err, "fetching the assigned servers failed");
-                return;
+                return self.assigned_servers.clone();
             }
         };
         let Some(servers) = listing.get("servers").and_then(Value::as_array) else {
-            return;
+            return self.assigned_servers.clone();
         };
+        let assigned = servers
+            .iter()
+            .filter_map(Value::as_str)
+            .map(str::to_string)
+            .collect::<BTreeSet<_>>();
+        self.assigned_servers = assigned.clone();
         let artifacts = listing.get("artifacts");
 
         for id in servers.iter().filter_map(Value::as_str) {
@@ -770,7 +837,7 @@ impl Agent {
                 Ok(sequence) => sequence,
                 Err(err) => {
                     warn!(error = %err, "advancing the report sequence failed");
-                    return;
+                    return assigned;
                 }
             };
 
@@ -822,6 +889,7 @@ impl Agent {
         }
 
         self.last_report = Some(Instant::now());
+        assigned
     }
 
     fn forget_credential(&mut self) -> Result<()> {

@@ -725,7 +725,7 @@ fn unique_suffix() -> String {
     format!("{}-{nanos}", std::process::id())
 }
 
-fn iso8601(time: SystemTime) -> String {
+pub(crate) fn iso8601(time: SystemTime) -> String {
     let seconds = time
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs() as i64)
