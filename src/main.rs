@@ -3,6 +3,7 @@ mod api;
 mod config;
 mod docker;
 mod error;
+mod file_tree;
 mod files;
 mod migrations;
 mod model;

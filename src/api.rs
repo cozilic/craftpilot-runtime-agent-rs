@@ -239,6 +239,32 @@ impl MasterClient {
         .await
     }
 
+    /// Skickar ett batchat katalogdelta till masterns filcache. Mastern
+    /// validerar att servern är tilldelad noden och att listningen matchar
+    /// dess `path`/`parent`-kontrakt.
+    pub async fn sync_file_tree(&self, node_id: &str, directories: &Value) -> Result<Value> {
+        self.request(
+            Method::POST,
+            &format!("api/runtime/nodes/{node_id}/file-tree"),
+            Some(directories),
+            true,
+        )
+        .await
+    }
+
+    /// Rapporterar `fetching`, `building`, `indexing` eller `ready` till
+    /// panelens filtree-progress.
+    pub async fn report_file_tree_progress(&self, node_id: &str, stage: &str) -> Result<Value> {
+        let body = serde_json::json!({ "stage": stage });
+        self.request(
+            Method::POST,
+            &format!("api/runtime/nodes/{node_id}/file-tree/progress"),
+            Some(&body),
+            true,
+        )
+        .await
+    }
+
     /// En statusrapport per server; `sequence` måste vara strikt ökande.
     pub async fn report_server(&self, node_id: &str, report: &Value) -> Result<Value> {
         self.request(
