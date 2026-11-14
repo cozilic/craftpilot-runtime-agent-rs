@@ -25,6 +25,7 @@ public sealed class StatusResponse
     public string? ClaimCode { get; init; }
     public string DataDir { get; init; } = string.Empty;
     public string InstallDir { get; init; } = string.Empty;
+    public bool StartupEnabled { get; init; }
     public bool Busy { get; init; }
 }
 

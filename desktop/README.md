@@ -38,6 +38,17 @@ uppmaning att starta Docker Desktop. Inga compose-filer skrivs förrän Docker �
 5. Statuskorten ska bli gröna för Docker, master och agent. Efter slutförd anslutning visar
    panelen **Redan ansluten** i stället för en ny kod.
 
+## Tray och automatisk start
+
+Panelen har en tray-ikon som visar om Docker, mastern och agenten är redo. Stäng fönstret med
+**X** för att lägga det i trayen i stället för att avsluta panelen. Välj **Öppna panelen** i
+tray-menyn för att visa den igen och **Avsluta** för att stoppa panelen.
+
+Bocken **Starta med Windows** lägger en post under
+`HKCU\Software\Microsoft\Windows\CurrentVersion\Run` och startar panelen med `--startup` vid
+inloggning. Då visas bara tray-ikonen; panelens fönster skapas först när du öppnar det. Samma
+inställning finns i tray-menyn.
+
 **Uppdatera** hämtar den senaste `main`-imagen och startar om agenten. **Stoppa** stoppar
 containern men behåller både serverdata och agentens state. Använd `docker compose ... down -v`
 manuellt om du vill radera anslutningen och tvinga en ny claim.
