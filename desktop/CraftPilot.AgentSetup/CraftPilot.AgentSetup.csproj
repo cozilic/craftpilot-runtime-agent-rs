@@ -9,6 +9,7 @@
     <RootNamespace>CraftPilot.AgentSetup</RootNamespace>
     <Version>0.3.1</Version>
     <OutputType>WinExe</OutputType>
+    <ApplicationIcon>Assets\craftpilot.ico</ApplicationIcon>
     <InvariantGlobalization>true</InvariantGlobalization>
     <PublishSingleFile>true</PublishSingleFile>
     <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
@@ -24,6 +25,7 @@
     <EmbeddedResource Include="wwwroot\index.html" LogicalName="wwwroot.index.html" />
     <EmbeddedResource Include="wwwroot\app.css" LogicalName="wwwroot.app.css" />
     <EmbeddedResource Include="wwwroot\app.js" LogicalName="wwwroot.app.js" />
+    <EmbeddedResource Include="Assets\craftpilot-icon.png" LogicalName="Assets.craftpilot-icon.png" />
     <EmbeddedResource Include="..\..\compose.desktop.yaml" LogicalName="compose.desktop.yaml" />
   </ItemGroup>
 

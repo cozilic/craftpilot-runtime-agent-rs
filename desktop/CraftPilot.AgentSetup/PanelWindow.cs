@@ -10,6 +10,7 @@ namespace CraftPilot.AgentSetup;
 public sealed class PanelWindow : Form
 {
     private readonly WebView2 _webView = new() { Dock = DockStyle.Fill };
+    private readonly Icon _brandIcon = TrayIconFactory.CreateBrandIcon(64);
     private readonly string _panelUrl;
     private bool _initialized;
     private bool _allowClose;
@@ -19,6 +20,7 @@ public sealed class PanelWindow : Form
         _panelUrl = panelUrl;
 
         Text = "CraftPilot Runtime Agent";
+        Icon = _brandIcon;
         ClientSize = new Size(1180, 820);
         MinimumSize = new Size(820, 600);
         StartPosition = FormStartPosition.CenterScreen;
@@ -30,6 +32,16 @@ public sealed class PanelWindow : Form
     }
 
     public void AllowClose() => _allowClose = true;
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing)
+        {
+            _brandIcon.Dispose();
+        }
+
+        base.Dispose(disposing);
+    }
 
     private void OnFormClosing(object? sender, FormClosingEventArgs e)
     {
