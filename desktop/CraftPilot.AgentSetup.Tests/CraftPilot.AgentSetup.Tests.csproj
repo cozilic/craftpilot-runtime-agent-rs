@@ -1,7 +1,8 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net8.0</TargetFramework>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <IsPackable>false</IsPackable>
@@ -17,5 +18,12 @@
   <ItemGroup>
     <ProjectReference Include="..\CraftPilot.AgentSetup\CraftPilot.AgentSetup.csproj" />
   </ItemGroup>
+
+  <Target Name="RemoveUnusedWebView2WpfReference" BeforeTargets="ResolveAssemblyReferences">
+    <ItemGroup>
+      <_WebView2WpfReference Include="@(Reference)" Condition="'%(Filename)' == 'Microsoft.Web.WebView2.Wpf'" />
+      <Reference Remove="@(_WebView2WpfReference)" />
+    </ItemGroup>
+  </Target>
 
 </Project>

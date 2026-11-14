@@ -1,7 +1,7 @@
 # CraftPilot Agent Setup (Windows)
 
 En liten lokal panel för att installera och övervaka Runtime Agent på Windows. Panelens
-webbgränssnitt startas av en enda EXE och öppnas i din vanliga webbläsare.
+gränssnitt startas av en enda EXE och visas i ett eget Windows-fönster med WebView2.
 
 ## Hämta och kör
 
@@ -18,13 +18,15 @@ välj **Mer information → Kör ändå**. Bygg den gärna själv från källkod
 ## Krav
 
 - Windows 10 eller 11, x64.
+- Microsoft Edge WebView2 Runtime. Det finns normalt redan på Windows 10/11.
 - Docker Desktop med **Linux-containrar**.
 - **Settings → Advanced → Allow the default Docker socket to be used** är aktiverat.
 - Utgående HTTPS till din master, till exempel `https://craftpilot.se`.
 
-Om Docker Desktop saknas visar panelen en varningsruta med nedladdningslänk och inaktiverar
-installationen. Om Docker Desktop finns men motorn inte är igång visas i stället en uppmaning att
-starta Docker Desktop. Inga compose-filer skrivs förrän Docker är redo.
+Om WebView2 Runtime saknas visas en upplysning och panelen öppnas i den vanliga webbläsaren i
+stället. Om Docker Desktop saknas visar panelen en varningsruta med nedladdningslänk och
+inaktiverar installationen. Om Docker Desktop finns men motorn inte är igång visas i stället en
+uppmaning att starta Docker Desktop. Inga compose-filer skrivs förrän Docker är redo.
 
 ## Använd panelen
 
@@ -53,6 +55,7 @@ agentstatusen.
 | Sak | Plats |
 | --- | --- |
 | Compose-fil och `.env.desktop` | `%LOCALAPPDATA%\CraftPilot\Agent` |
+| WebView2-data | `%LOCALAPPDATA%\CraftPilot\Agent\WebView2` |
 | Serverdata (standard) | `%USERPROFILE%\CraftPilot\servers` |
 | Agentens state | Docker-volymen `craftpilot_rs_agent_state` |
 | Agentcontainer | `craftpilot-runtime-agent-rs` |
@@ -62,9 +65,10 @@ Compose-filen som används är repots `compose.desktop.yaml`, inbäddad i EXE-fi
 ## Säkerhet
 
 Panelens HTTP-server lyssnar bara på `127.0.0.1` och kräver en slumpad token som genereras vid
-varje start. Den har ingen inloggning och ska bara köras på din egen dator. Agenten får åtkomst
-till Docker-socketen, vilket i praktiken är root på värden – behandla den som en privilegierad
-tjänst.
+varje start. Fönstret får bara navigera till panelens egen loopback-adress; externa länkar öppnas
+i standardwebbläsaren. Panelen har ingen inloggning och ska bara köras på din egen dator. Agenten
+får åtkomst till Docker-socketen, vilket i praktiken är root på värden – behandla den som en
+privilegierad tjänst.
 
 EXE-filen är inte kodsignerad. Panelen jämför sin version med senaste GitHub-releasen och visar
 en länk när en nyare version finns. Ladda bara ner den från repots GitHub Releases eller bygg

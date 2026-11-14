@@ -93,8 +93,13 @@ await app.StartAsync();
 
 var url = app.Urls.FirstOrDefault() ?? "http://127.0.0.1:5188";
 Console.WriteLine($"CraftPilot Agent Setup UI: {url}");
-Console.WriteLine("Stäng det här fönstret för att stoppa panelen.");
-OpenBrowser(url);
+Console.WriteLine("Stäng panelens fönster för att stoppa panelen.");
+
+if (!WebViewWindow.TryShow(url, app.Lifetime))
+{
+    WebViewWindow.ShowFallbackMessage();
+    OpenBrowser(url);
+}
 
 await app.WaitForShutdownAsync();
 
