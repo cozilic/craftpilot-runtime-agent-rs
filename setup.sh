@@ -136,7 +136,10 @@ fi
 # agenten hinner göra sin första heartbeat och skriva loggraden.
 claim=""
 for _ in $(seq 1 30); do
-  logs="$(docker compose logs --no-color --tail 80 agent 2>&1 || true)"
+  # Rust-agenten skriver ANSI-färgkoder även när Docker fångar loggen;
+  # --no-color tar bara bort Compose egna koder. Utan strippning matchar
+  # aldrig "claim_code=CP-..." och setupen tror att ingen kod finns.
+  logs="$(docker compose logs --no-color --tail 80 agent 2>&1 | sed -E 's/\x1B\[[0-9;]*[A-Za-z]//g' || true)"
   claim="$(printf '%s\n' "$logs" | grep -oE 'claim_code=CP-[A-Z0-9]{5}-[A-Z0-9]{5}' | tail -n 1 | cut -d= -f2 || true)"
   [ -n "$claim" ] && break
   sleep 2
