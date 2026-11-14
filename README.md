@@ -6,6 +6,9 @@ Minecraft containers through the host's Docker daemon, and speaks the **same HTT
 the Python agent — no master changes are required to run it side by side.
 
 > **Svensk driftsättningsguide för nodägare:** [GUIDE.sv.md](GUIDE.sv.md)
+>
+> **Windows-panel (EXE):** [desktop/README.md](desktop/README.md) – ladda ner, dubbelklicka och
+> följ statusen för Docker, master och agent.
 
 > **Status: phase 7.** Enrollment, heartbeat, command claiming, acknowledgement, START, STOP over
 > RCON, the one-time initial SNAPSHOT, console commands, the file manager, encrypted runtime-node
