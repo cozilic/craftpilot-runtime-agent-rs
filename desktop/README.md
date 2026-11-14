@@ -40,6 +40,14 @@ starta Docker Desktop. Inga compose-filer skrivs förrän Docker är redo.
 containern men behåller både serverdata och agentens state. Använd `docker compose ... down -v`
 manuellt om du vill radera anslutningen och tvinga en ny claim.
 
+## Uppdatera panelen
+
+Panelen jämför automatiskt sin egen version med den senaste stabila GitHub-releasen när den
+startar. Om en nyare version finns visas en rad med versionsnummer och en nedladdningslänk.
+**Kontrollera igen** gör om både status- och versionskontrollen. Kontrollen kräver HTTPS till
+`api.github.com` och resultatet cachas i tio minuter; ett nätverksfel påverkar inte Docker- eller
+agentstatusen.
+
 ## Var sakerna hamnar
 
 | Sak | Plats |
@@ -58,8 +66,9 @@ varje start. Den har ingen inloggning och ska bara köras på din egen dator. Ag
 till Docker-socketen, vilket i praktiken är root på värden – behandla den som en privilegierad
 tjänst.
 
-EXE-filen är inte kodsignerad och panelen kontrollerar inte uppdateringar av sig själv. Ladda bara
-ner den från repots GitHub Actions eller bygg den själv.
+EXE-filen är inte kodsignerad. Panelen jämför sin version med senaste GitHub-releasen och visar
+en länk när en nyare version finns. Ladda bara ner den från repots GitHub Releases eller bygg
+den själv.
 
 ## Bygg och testa
 

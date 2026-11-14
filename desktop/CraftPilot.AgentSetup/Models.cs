@@ -33,3 +33,13 @@ public sealed record OperationResponse(
     string Output,
     string? Error,
     StatusResponse? Status);
+
+public sealed class UpdateCheckResponse
+{
+    public string CurrentVersion { get; init; } = "0.0.0";
+    public string? LatestVersion { get; init; }
+    public string? ReleaseUrl { get; init; }
+    public bool UpdateAvailable { get; init; }
+    public string? Error { get; init; }
+    public DateTimeOffset CheckedAt { get; init; }
+}
