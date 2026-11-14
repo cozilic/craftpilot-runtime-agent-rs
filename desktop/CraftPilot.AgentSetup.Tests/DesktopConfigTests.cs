@@ -9,7 +9,7 @@ public sealed class DesktopConfigTests
     {
         var dataDirectory = Path.Combine(Path.GetTempPath(), "craftpilot setup", "servers");
 
-        var env = DesktopConfig.BuildEnvFile("https://craftpilot.se", dataDirectory);
+        var env = DesktopConfig.BuildEnvFile(dataDirectory);
 
         Assert.Contains("CRAFTPILOT_MASTER_URL=https://craftpilot.se", env);
         Assert.Contains("CRAFTPILOT_SERVER_DATA_ROOT=/srv/craftpilot/servers", env);

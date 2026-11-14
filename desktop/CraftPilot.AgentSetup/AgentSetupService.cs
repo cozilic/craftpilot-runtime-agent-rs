@@ -37,7 +37,7 @@ public sealed class AgentSetupService
         {
             InstallDir = InstallDirectory,
             DataDir = ReadSavedDataDir(),
-            MasterUrl = ReadSavedMasterUrl(),
+            MasterUrl = MasterUrl.Default,
             Installed = File.Exists(ComposePath) && File.Exists(EnvPath),
             Busy = _session.Busy,
         };
@@ -177,7 +177,7 @@ public sealed class AgentSetupService
             WriteCompose();
             await File.WriteAllTextAsync(
                 EnvPath,
-                DesktopConfig.BuildEnvFile(master, dataDirectory),
+                DesktopConfig.BuildEnvFile(dataDirectory),
                 new UTF8Encoding(false),
                 ct);
 
@@ -251,6 +251,12 @@ public sealed class AgentSetupService
             {
                 return Fail("Agenten är inte installerad ännu.", output);
             }
+
+            await File.WriteAllTextAsync(
+                EnvPath,
+                DesktopConfig.BuildEnvFile(ReadSavedDataDir()),
+                new UTF8Encoding(false),
+                ct);
 
             var docker = await CheckDockerAsync(ct);
             if (docker.State != DockerStateClassifier.Ready)
@@ -432,8 +438,6 @@ public sealed class AgentSetupService
         using var reader = new StreamReader(resource);
         File.WriteAllText(ComposePath, reader.ReadToEnd(), new UTF8Encoding(false));
     }
-
-    private string ReadSavedMasterUrl() => ReadEnv("CRAFTPILOT_MASTER_URL") ?? MasterUrl.Default;
 
     private string ReadSavedDataDir() =>
         ReadEnv("CRAFTPILOT_HOST_DATA_DIR") ?? DefaultDataDirectory;

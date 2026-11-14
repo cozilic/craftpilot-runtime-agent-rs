@@ -218,7 +218,7 @@ function renderStatus(status) {
       'agent-card', 'agent-dot', 'agent-badge', 'agent-title', 'agent-detail',
       'idle', 'Saknas',
       'Ingen agent installerad',
-      'Ange master och klicka på Installera / starta.'
+      'Välj serverdata och klicka på Installera / starta.'
     );
   }
 
@@ -260,16 +260,13 @@ function renderStatus(status) {
     $('copy-claim').disabled = true;
   }
 
-  if (document.activeElement !== $('master-url')) {
-    $('master-url').value = status.masterUrl || '';
-  }
   if (document.activeElement !== $('data-dir')) {
     $('data-dir').value = status.dataDir || '';
   }
 
   $('install-dir').textContent = status.installDir || '—';
-  $('master-link').href = `${(status.masterUrl || 'https://craftpilot.se').replace(/\/$/, '')}/node`;
-  $('settings-note').textContent = status.busy ? 'Arbetar…' : 'Sparas lokalt';
+  $('master-link').href = 'https://craftpilot.se/node';
+  $('settings-note').textContent = status.busy ? 'Arbetar…' : 'Master låst';
 
   state.busy = Boolean(status.busy);
   applyControls();
@@ -372,9 +369,8 @@ function install() {
     return;
   }
 
-  const masterUrl = $('master-url').value.trim();
   const dataDir = $('data-dir').value.trim();
-  runOperation('/api/install', { masterUrl, dataDir }, 'Installerar och startar agenten');
+  runOperation('/api/install', { dataDir }, 'Installerar och startar agenten');
 }
 
 $('install').addEventListener('click', install);

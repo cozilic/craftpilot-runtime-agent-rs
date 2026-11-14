@@ -615,11 +615,37 @@ h1 span {
   color: var(--faint);
 }
 
+.field-static {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 42px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: var(--muted);
+  background: rgba(5, 10, 13, 0.35);
+  font-size: 13px;
+  font-weight: 400;
+}
+
+.field-static code {
+  color: var(--text);
+  font-family: "Cascadia Code", Consolas, monospace;
+  font-size: 13px;
+}
+
 .hint {
   margin: 10px 0 18px;
   color: var(--faint);
   font-size: 12px;
   line-height: 1.55;
+}
+
+.hint code {
+  color: var(--muted);
+  font-family: "Cascadia Code", Consolas, monospace;
+  font-size: 11px;
 }
 
 .path-line {

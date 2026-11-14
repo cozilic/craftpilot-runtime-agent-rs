@@ -4,7 +4,7 @@ public static class DesktopConfig
 {
     public const string ServerDataRoot = "/srv/craftpilot/servers";
 
-    public static string BuildEnvFile(string masterUrl, string dataDirectory)
+    public static string BuildEnvFile(string dataDirectory)
     {
         var hostPath = Path.GetFullPath(dataDirectory).Replace('\\', '/');
 
@@ -13,7 +13,7 @@ public static class DesktopConfig
             $"CRAFTPILOT_HOST_DATA_DIR={hostPath}",
             $"CRAFTPILOT_SERVER_DATA_ROOT={ServerDataRoot}",
             $"CRAFTPILOT_DOCKER_SERVER_DATA_ROOT={hostPath}",
-            $"CRAFTPILOT_MASTER_URL={masterUrl}",
+            $"CRAFTPILOT_MASTER_URL={MasterUrl.Default}",
             "CRAFTPILOT_POLL_SECONDS=5",
             "RUST_LOG=info",
             string.Empty);
