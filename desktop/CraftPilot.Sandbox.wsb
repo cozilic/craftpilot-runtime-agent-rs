@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Configuration>
+  <!-- Windows Sandbox startar med Smart App Control på. Stäng av det endast i den här tillfälliga sandboxen. -->
+  <LogonCommand>
+    <Command>reg add "HKLM\SYSTEM\CurrentControlSet\Control\CI\Policy" /v VerifiedAndReputablePolicyState /t REG_DWORD /d 0 /f</Command>
+    <Command>C:\Windows\System32\CiTool.exe -r</Command>
+  </LogonCommand>
+</Configuration>

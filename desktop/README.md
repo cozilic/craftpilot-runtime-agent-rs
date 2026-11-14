@@ -89,6 +89,31 @@ dotnet publish desktop/CraftPilot.AgentSetup/CraftPilot.AgentSetup.csproj \
 `desktop.yml` kör testerna och publicerar EXE-filen som artifact på varje ändring under
 `desktop/`.
 
+## Testa i Windows Sandbox
+
+Windows Sandbox kräver Windows 10/11 Pro, Enterprise eller Education. Sandboxen startar med
+Smart App Control på, vilket blockerar osignerade builds.
+
+`desktop/CraftPilot.Sandbox.wsb` stänger av Smart App Control endast i den tillfälliga
+sandboxen. Kör den genom att dubbelklicka på filen eller välja **Öppna med → Windows Sandbox**.
+
+1. Bygg eller ladda ner `CraftPilot.AgentSetup.exe`.
+2. Starta `desktop/CraftPilot.Sandbox.wsb`.
+3. Kopiera EXE:n till sandboxen och kör den.
+4. Stäng sandboxen när du är klar; nästa session börjar med Smart App Control på igen.
+
+Kommandot i `.wsb`-filen ändrar bara sandboxens register. Kör det inte på din vanliga
+Windows-installation. Vill du undvika att kopiera filen kan du lägga till en `MappedFolder` med
+absolut sökväg till `desktop/dist` i `.wsb`-filen.
+
+Om filen fortfarande blockeras kan du kontrollera statusen i sandboxen:
+
+```powershell
+Get-MpComputerStatus | Select-Object SmartAppControlState
+```
+
+`SmartAppControlState` ska vara `Off`. Starta i så fall om sandboxen och försök igen.
+
 ## Om Docker inte fungerar
 
 **Docker Desktop saknas**
