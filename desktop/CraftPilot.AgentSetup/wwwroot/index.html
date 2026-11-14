@@ -20,9 +20,12 @@
           <span>Runtime Agent</span>
         </span>
       </a>
-      <div class="local-pill">
-        <span class="dot dot-ok"></span>
-        Lokal panel
+      <div class="topbar-meta">
+        <span class="version-pill" id="panel-version" title="Panelversion">v…</span>
+        <div class="local-pill">
+          <span class="dot dot-ok"></span>
+          Lokal panel
+        </div>
       </div>
     </header>
 
@@ -45,6 +48,19 @@
             Installera / starta
           </button>
         </div>
+      </section>
+
+      <section class="update-banner" id="update-banner" role="status" aria-live="polite" hidden>
+        <div class="update-copy">
+          <span class="dot dot-warn" id="update-dot" aria-hidden="true"></span>
+          <div>
+            <strong id="update-title">Ny panelversion finns</strong>
+            <p id="update-text"></p>
+          </div>
+        </div>
+        <a class="button button-primary" id="update-link" href="#" target="_blank" rel="noopener" hidden>
+          Ladda ner
+        </a>
       </section>
 
       <section class="status-grid" aria-label="Systemstatus">

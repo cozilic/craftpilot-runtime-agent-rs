@@ -6,6 +6,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>CraftPilot.AgentSetup</AssemblyName>
     <RootNamespace>CraftPilot.AgentSetup</RootNamespace>
+    <Version>0.2.0</Version>
     <OutputType>Exe</OutputType>
     <InvariantGlobalization>true</InvariantGlobalization>
     <PublishSingleFile>true</PublishSingleFile>

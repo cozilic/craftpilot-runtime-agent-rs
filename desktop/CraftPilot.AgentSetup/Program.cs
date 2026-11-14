@@ -13,6 +13,7 @@ var builder = WebApplication.CreateBuilder(args);
 builder.WebHost.ConfigureKestrel(options => options.Listen(IPAddress.Loopback, 0));
 builder.Services.AddSingleton<SetupSession>();
 builder.Services.AddSingleton<AgentSetupService>();
+builder.Services.AddSingleton<UpdateChecker>();
 builder.Logging.ClearProviders();
 
 var app = builder.Build();
@@ -66,6 +67,9 @@ app.MapPost("/api/install", async (
     InstallRequest request,
     AgentSetupService service,
     CancellationToken ct) => Results.Ok(await service.InstallAsync(request, ct)));
+
+app.MapGet("/api/version", async (UpdateChecker checker, CancellationToken ct) =>
+    Results.Ok(await checker.CheckAsync(ct)));
 
 app.MapPost("/api/update", async (AgentSetupService service, CancellationToken ct) =>
     Results.Ok(await service.UpdateAsync(ct)));

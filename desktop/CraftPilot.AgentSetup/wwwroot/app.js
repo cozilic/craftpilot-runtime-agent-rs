@@ -39,6 +39,59 @@ function setCard(cardId, dotId, badgeId, titleId, detailId, kind, badge, title, 
   $(cardId).dataset.status = kind;
 }
 
+function versionLabel(value) {
+  if (!value) {
+    return 'v?';
+  }
+
+  return /^v/i.test(value) ? value : `v${value}`;
+}
+
+function renderVersion(check) {
+  const current = versionLabel(check.currentVersion);
+  const pill = $('panel-version');
+  const banner = $('update-banner');
+  const link = $('update-link');
+
+  pill.textContent = current;
+  pill.dataset.state = check.error ? 'error' : 'ok';
+  pill.title = check.error
+    ? `Panelversion ${current}. ${check.error}`
+    : `Panelversion ${current}`;
+
+  if (check.updateAvailable && check.latestVersion && check.releaseUrl) {
+    banner.hidden = false;
+    banner.dataset.state = 'available';
+    $('update-dot').className = 'dot dot-warn';
+    $('update-title').textContent = `Ny panelversion ${versionLabel(check.latestVersion)} finns`;
+    $('update-text').textContent = `Du kör ${current}. Ladda ner den nya versionen från GitHub Releases.`;
+    link.href = check.releaseUrl;
+    link.hidden = false;
+    return;
+  }
+
+  if (check.error) {
+    banner.hidden = false;
+    banner.dataset.state = 'error';
+    $('update-dot').className = 'dot dot-idle';
+    $('update-title').textContent = 'Kunde inte kontrollera panelversionen';
+    $('update-text').textContent = `${check.error} Klicka på Kontrollera igen för att försöka på nytt.`;
+    link.hidden = true;
+    return;
+  }
+
+  banner.hidden = true;
+  link.hidden = true;
+}
+
+async function checkVersion() {
+  try {
+    renderVersion(await api('/api/version'));
+  } catch (error) {
+    renderVersion({ error: `Kunde inte läsa versionsinformationen: ${error.message}` });
+  }
+}
+
 function shortError(value) {
   if (!value) {
     return 'Ingen detalj tillgänglig.';
@@ -326,7 +379,10 @@ function install() {
 
 $('install').addEventListener('click', install);
 $('install-panel').addEventListener('click', install);
-$('refresh').addEventListener('click', () => refresh(true));
+$('refresh').addEventListener('click', () => {
+  refresh(true);
+  checkVersion();
+});
 $('load-logs').addEventListener('click', loadLogs);
 
 $('update').addEventListener('click', () => {
@@ -379,6 +435,7 @@ $('quit').addEventListener('click', async () => {
 });
 
 refresh(true);
+checkVersion();
 window.setInterval(() => {
   if (!state.busy) {
     refresh(false);
