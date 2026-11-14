@@ -55,7 +55,8 @@ Fullständig Linux-guide: [GUIDE.sv.md](GUIDE.sv.md).
    [senaste release](https://github.com/cozilic/craftpilot-runtime-agent-rs/releases/latest/download/CraftPilot.AgentSetup.exe).
 2. Kontrollera att Docker Desktop är igång med Linux-containrar och att den publika
    Docker-socketen är aktiverad.
-3. Kör EXE:n. Panelen öppnas i webbläsaren.
+3. Kör EXE:n. Panelen öppnas i ett eget Windows-fönster. Om WebView2 Runtime saknas
+   öppnas den i webbläsaren i stället.
 4. Ange master-URL och serverdata, klicka **Installera / starta** och kopiera claim-koden.
 
 EXE:n är osignierad, så Windows SmartScreen kan varna första gången. Välj **Mer information →
