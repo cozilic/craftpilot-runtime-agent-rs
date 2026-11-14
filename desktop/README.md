@@ -5,9 +5,12 @@ webbgränssnitt startas av en enda EXE och öppnas i din vanliga webbläsare.
 
 ## Hämta och kör
 
-1. Öppna **Actions → Desktop setup** i GitHub och välj den senaste körningen på `main`.
-2. Ladda ner artifacten **CraftPilotAgentSetup-win-x64** och packa upp den.
-3. Kör `CraftPilot.AgentSetup.exe`.
+Ladda ner `CraftPilot.AgentSetup.exe` från
+[senaste release](https://github.com/cozilic/craftpilot-runtime-agent-rs/releases/latest/download/CraftPilot.AgentSetup.exe).
+Om ingen release har publicerats ännu kan du hämta artifacten **CraftPilotAgentSetup-win-x64**
+från **Actions → Desktop setup** i stället.
+
+Kör sedan `CraftPilot.AgentSetup.exe`.
 
 EXE-filen är **osignierad**. Windows SmartScreen kan därför visa en varning första gången:
 välj **Mer information → Kör ändå**. Bygg den gärna själv från källkoden om du föredrar det.

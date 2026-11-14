@@ -3,6 +3,8 @@
 Den här guiden startar en Runtime Agent på en Linux-server och kopplar den till CraftPilot.
 Du behöver inte bygga något själv.
 
+> **Välj plattform:** [INSTALL.sv.md](INSTALL.sv.md) har snabbstart för både Linux och Windows.
+
 ## Innan du börjar
 
 - Linux **x86_64/amd64**. Den publicerade agentimagen är byggd för amd64.

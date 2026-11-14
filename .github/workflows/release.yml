@@ -1,0 +1,109 @@
+name: Release installers
+
+on:
+  push:
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  windows:
+    name: Windows EXE
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Test
+        run: dotnet test desktop/CraftPilot.AgentSetup.Tests/CraftPilot.AgentSetup.Tests.csproj -c Release --nologo
+
+      - name: Publish single-file EXE
+        run: >
+          dotnet publish desktop/CraftPilot.AgentSetup/CraftPilot.AgentSetup.csproj
+          -c Release
+          -r win-x64
+          --self-contained true
+          -p:PublishSingleFile=true
+          -p:EnableCompressionInSingleFile=true
+          -p:DebugType=None
+          -p:DebugSymbols=false
+          -o dist/win
+
+      - name: Upload Windows EXE
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-windows
+          path: dist/win/CraftPilot.AgentSetup.exe
+          if-no-files-found: error
+
+  linux:
+    name: Linux installer bundle
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Package Linux installer
+        run: |
+          set -euo pipefail
+          mkdir -p dist/craftpilot-agent-linux
+          cp setup.sh compose.yaml GUIDE.sv.md INSTALL.sv.md dist/craftpilot-agent-linux/
+          chmod +x dist/craftpilot-agent-linux/setup.sh
+          tar -czf dist/craftpilot-agent-linux.tar.gz -C dist craftpilot-agent-linux
+          ls -lh dist/craftpilot-agent-linux.tar.gz
+
+      - name: Upload Linux installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-linux
+          path: dist/craftpilot-agent-linux.tar.gz
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [windows, linux]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download installers
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Create checksums
+        run: |
+          set -euo pipefail
+          cd dist
+          sha256sum CraftPilot.AgentSetup.exe craftpilot-agent-linux.tar.gz > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Publish release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release create "${GITHUB_REF_NAME}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --verify-tag \
+            --title "CraftPilot Runtime Agent ${GITHUB_REF_NAME}" \
+            --generate-notes \
+            dist/CraftPilot.AgentSetup.exe \
+            dist/craftpilot-agent-linux.tar.gz \
+            dist/SHA256SUMS

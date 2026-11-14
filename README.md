@@ -5,6 +5,9 @@ built as a side project. The agent connects a trusted host to a CraftPilot maste
 Minecraft containers through the host's Docker daemon, and speaks the **same HTTP contract** as
 the Python agent — no master changes are required to run it side by side.
 
+> **Installera agenten:** [INSTALL.sv.md](INSTALL.sv.md) – Linux med `setup.sh` eller Windows med
+> en fristående EXE.
+>
 > **Svensk driftsättningsguide för nodägare:** [GUIDE.sv.md](GUIDE.sv.md)
 >
 > **Windows-panel (EXE):** [desktop/README.md](desktop/README.md) – ladda ner, dubbelklicka och
