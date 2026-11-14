@@ -41,18 +41,15 @@ public sealed class AgentSetupService
             Busy = _session.Busy,
         };
 
-        var docker = await RunAsync(
-            "docker",
-            ["version", "--format", "{{.Server.Version}}"],
-            TimeSpan.FromSeconds(5),
-            null,
-            ct);
+        var docker = await CheckDockerAsync(ct);
 
         status = CopyStatus(
             status,
-            dockerOk: docker.ExitCode == 0,
-            dockerVersion: docker.ExitCode == 0 ? docker.StdOut.Trim() : null,
-            dockerError: docker.ExitCode == 0 ? null : FirstLine(docker.Combined));
+            dockerOk: docker.State == DockerStateClassifier.Ready,
+            dockerState: docker.State,
+            dockerDesktopInstalled: docker.DesktopInstalled,
+            dockerVersion: docker.Version,
+            dockerError: docker.Error);
 
         if (MasterUrl.TryNormalize(status.MasterUrl, out var master, out var masterError))
         {
@@ -102,35 +99,38 @@ public sealed class AgentSetupService
             status = CopyStatus(status, masterError: masterError);
         }
 
-        var inspect = await RunAsync(
-            "docker",
-            ["inspect", "--format", "{{.State.Status}}\t{{.Config.Image}}", ContainerName],
-            TimeSpan.FromSeconds(5),
-            null,
-            ct);
+        if (docker.State == DockerStateClassifier.Ready)
+        {
+            var inspect = await RunAsync(
+                "docker",
+                ["inspect", "--format", "{{.State.Status}}\t{{.Config.Image}}", ContainerName],
+                TimeSpan.FromSeconds(5),
+                null,
+                ct);
 
-        if (inspect.ExitCode == 0)
-        {
-            var parts = inspect.StdOut.Trim().Split('\t', 2);
-            status = CopyStatus(
-                status,
-                agentStatus: parts.ElementAtOrDefault(0),
-                agentImage: parts.ElementAtOrDefault(1),
-                agentRunning: string.Equals(parts.ElementAtOrDefault(0), "running", StringComparison.OrdinalIgnoreCase));
-        }
-        else
-        {
-            status = CopyStatus(status, agentError: FirstLine(inspect.Combined));
-        }
+            if (inspect.ExitCode == 0)
+            {
+                var parts = inspect.StdOut.Trim().Split('\t', 2);
+                status = CopyStatus(
+                    status,
+                    agentStatus: parts.ElementAtOrDefault(0),
+                    agentImage: parts.ElementAtOrDefault(1),
+                    agentRunning: string.Equals(parts.ElementAtOrDefault(0), "running", StringComparison.OrdinalIgnoreCase));
+            }
+            else
+            {
+                status = CopyStatus(status, agentError: FirstLine(inspect.Combined));
+            }
 
-        if (status.Installed)
-        {
-            var logs = await GetLogsAsync(ct);
-            var completed = logs.Contains("enrollment completed", StringComparison.OrdinalIgnoreCase);
-            status = CopyStatus(
-                status,
-                enrollmentCompleted: completed,
-                claimCode: completed ? null : ClaimCodeParser.Extract(logs));
+            if (status.Installed)
+            {
+                var logs = await GetComposeLogsAsync(ct);
+                var completed = logs.Contains("enrollment completed", StringComparison.OrdinalIgnoreCase);
+                status = CopyStatus(
+                    status,
+                    enrollmentCompleted: completed,
+                    claimCode: completed ? null : ClaimCodeParser.Extract(logs));
+            }
         }
 
         return status;
@@ -147,6 +147,17 @@ public sealed class AgentSetupService
             if (!MasterUrl.TryNormalize(request.MasterUrl ?? MasterUrl.Default, out var master, out var error))
             {
                 return Fail(error, output);
+            }
+
+            var docker = await CheckDockerAsync(ct);
+            if (docker.State != DockerStateClassifier.Ready)
+            {
+                if (!string.IsNullOrWhiteSpace(docker.Error))
+                {
+                    output.AppendLine(docker.Error);
+                }
+
+                return Fail(DockerGuidance(docker.State), output);
             }
 
             string dataDirectory;
@@ -240,6 +251,12 @@ public sealed class AgentSetupService
                 return Fail("Agenten är inte installerad ännu.", output);
             }
 
+            var docker = await CheckDockerAsync(ct);
+            if (docker.State != DockerStateClassifier.Ready)
+            {
+                return Fail(DockerGuidance(docker.State), output);
+            }
+
             var pull = await ComposeAsync(["pull"], TimeSpan.FromMinutes(5), ct);
             Append(output, pull);
             if (pull.ExitCode != 0)
@@ -281,6 +298,12 @@ public sealed class AgentSetupService
                 return Fail("Agenten är inte installerad ännu.", output);
             }
 
+            var docker = await CheckDockerAsync(ct);
+            if (docker.State != DockerStateClassifier.Ready)
+            {
+                return Fail(DockerGuidance(docker.State), output);
+            }
+
             var down = await ComposeAsync(["down"], TimeSpan.FromMinutes(2), ct);
             Append(output, down);
             if (down.ExitCode != 0)
@@ -308,12 +331,67 @@ public sealed class AgentSetupService
             return string.Empty;
         }
 
+        var docker = await CheckDockerAsync(ct);
+        if (docker.State != DockerStateClassifier.Ready)
+        {
+            return DockerGuidance(docker.State);
+        }
+
+        return await GetComposeLogsAsync(ct);
+    }
+
+    private async Task<string> GetComposeLogsAsync(CancellationToken ct)
+    {
         var logs = await ComposeAsync(
             ["logs", "--no-color", "--tail", "300", "agent"],
             TimeSpan.FromSeconds(20),
             ct);
 
         return ClaimCodeParser.StripAnsi(logs.Combined).Trim();
+    }
+
+    private async Task<DockerCheck> CheckDockerAsync(CancellationToken ct)
+    {
+        var result = await RunAsync(
+            "docker",
+            ["version", "--format", "{{.Server.Version}}"],
+            TimeSpan.FromSeconds(5),
+            null,
+            ct);
+
+        var state = DockerStateClassifier.Classify(result.ExitCode, result.Combined, result.StartFailed);
+        return new DockerCheck(
+            state,
+            result.ExitCode == 0 ? result.StdOut.Trim() : null,
+            result.ExitCode == 0 ? null : FirstLine(result.Combined),
+            IsDockerDesktopInstalled());
+    }
+
+    private static string DockerGuidance(string state) => state switch
+    {
+        DockerStateClassifier.NotInstalled =>
+            "Docker Desktop är inte installerat. Ladda ner Docker Desktop med Linux-containrar, starta det och försök igen.",
+        DockerStateClassifier.NotRunning =>
+            "Docker Desktop är installerat men motorn är inte igång. Starta Docker Desktop och vänta tills Docker-motorn är redo.",
+        _ => "Docker svarar inte. Kontrollera Docker Desktop och försök igen.",
+    };
+
+    private static bool IsDockerDesktopInstalled()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return false;
+        }
+
+        var programFiles = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
+        var localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+
+        return new[]
+        {
+            Path.Combine(programFiles, "Docker", "Docker", "Docker Desktop.exe"),
+            Path.Combine(localAppData, "Docker", "Docker Desktop.exe"),
+            Path.Combine(localAppData, "Programs", "Docker", "Docker Desktop.exe"),
+        }.Any(File.Exists);
     }
 
     public void OpenInstallFolder()
@@ -407,7 +485,7 @@ public sealed class AgentSetupService
         }
         catch (Exception ex) when (ex is Win32Exception or InvalidOperationException)
         {
-            return new ProcessResult(-1, string.Empty, ex.Message);
+            return new ProcessResult(-1, string.Empty, ex.Message, StartFailed: true);
         }
 
         var stdoutTask = process.StandardOutput.ReadToEndAsync();
@@ -481,6 +559,8 @@ public sealed class AgentSetupService
     private static StatusResponse CopyStatus(
         StatusResponse source,
         bool? dockerOk = null,
+        string? dockerState = null,
+        bool? dockerDesktopInstalled = null,
         string? dockerVersion = null,
         string? dockerError = null,
         bool? masterOk = null,
@@ -497,6 +577,8 @@ public sealed class AgentSetupService
         new()
         {
             DockerOk = dockerOk ?? source.DockerOk,
+            DockerState = dockerState ?? source.DockerState,
+            DockerDesktopInstalled = dockerDesktopInstalled ?? source.DockerDesktopInstalled,
             DockerVersion = dockerVersion ?? source.DockerVersion,
             DockerError = dockerError ?? source.DockerError,
             MasterOk = masterOk ?? source.MasterOk,
@@ -517,7 +599,9 @@ public sealed class AgentSetupService
             Busy = source.Busy,
         };
 
-    private sealed record ProcessResult(int ExitCode, string StdOut, string StdErr)
+    private sealed record DockerCheck(string State, string? Version, string? Error, bool DesktopInstalled);
+
+    private sealed record ProcessResult(int ExitCode, string StdOut, string StdErr, bool StartFailed = false)
     {
         public string Combined => string.Join(
             Environment.NewLine,

@@ -3,6 +3,8 @@ namespace CraftPilot.AgentSetup;
 public sealed class StatusResponse
 {
     public bool DockerOk { get; init; }
+    public string DockerState { get; init; } = DockerStateClassifier.Error;
+    public bool DockerDesktopInstalled { get; init; }
     public string? DockerVersion { get; init; }
     public string? DockerError { get; init; }
 

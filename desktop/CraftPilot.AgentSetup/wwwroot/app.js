@@ -1,6 +1,6 @@
 const token = document.querySelector('meta[name="cp-token"]')?.content ?? '';
 const $ = (id) => document.getElementById(id);
-const state = { busy: false, loaded: false };
+const state = { busy: false, loaded: false, dockerReady: false, installed: false };
 
 async function api(path, options = {}) {
   const response = await fetch(path, {
@@ -47,24 +47,77 @@ function shortError(value) {
   return value.split('\n').map((line) => line.trim()).find(Boolean) ?? 'Okänt fel.';
 }
 
+function setDockerNotice(status, dockerState) {
+  const notice = $('docker-notice');
+  const download = $('docker-download');
+  const cardLink = $('docker-link');
+
+  if (dockerState === 'ready') {
+    notice.hidden = true;
+    download.hidden = true;
+    cardLink.hidden = true;
+    return;
+  }
+
+  const notInstalled = dockerState === 'not-installed';
+  const desktopPresent = status.dockerDesktopInstalled === true;
+  notice.hidden = false;
+
+  $('docker-notice-title').textContent = notInstalled
+    ? (desktopPresent ? 'Docker-kommandot hittades inte' : 'Docker Desktop saknas')
+    : (dockerState === 'not-running' ? 'Docker Desktop är inte igång' : 'Docker svarar inte');
+
+  $('docker-notice-text').textContent = notInstalled
+    ? (desktopPresent
+      ? 'Docker Desktop finns men kommandot docker hittades inte. Starta om Docker Desktop och panelen.'
+      : 'Installera Docker Desktop med Linux-containrar, starta det och klicka på Kontrollera igen.')
+    : (dockerState === 'not-running'
+      ? 'Starta Docker Desktop och vänta tills motorn är redo. Installationen är blockerad tills dess.'
+      : 'Kontrollera Docker Desktop och klicka på Kontrollera igen.');
+
+  download.hidden = !notInstalled || desktopPresent;
+  cardLink.hidden = !notInstalled || desktopPresent;
+}
+
 function renderStatus(status) {
   state.loaded = true;
+  const dockerState = status.dockerState || (status.dockerOk ? 'ready' : 'error');
+  state.dockerReady = dockerState === 'ready';
+  state.installed = Boolean(status.installed);
 
-  if (status.dockerOk) {
+  if (state.dockerReady) {
     setCard(
       'docker-card', 'docker-dot', 'docker-badge', 'docker-title', 'docker-detail',
       'ok', 'Redo',
       'Docker är redo',
       `Server ${status.dockerVersion || 'tillgänglig'}`
     );
+  } else if (dockerState === 'not-installed') {
+    setCard(
+      'docker-card', 'docker-dot', 'docker-badge', 'docker-title', 'docker-detail',
+      'warn', 'Saknas',
+      status.dockerDesktopInstalled ? 'Docker-kommandot saknas' : 'Docker Desktop saknas',
+      status.dockerDesktopInstalled
+        ? 'Docker Desktop finns men kommandot docker hittades inte. Starta om Docker Desktop och panelen.'
+        : 'Installera Docker Desktop med Linux-containrar för att kunna installera agenten.'
+    );
+  } else if (dockerState === 'not-running') {
+    setCard(
+      'docker-card', 'docker-dot', 'docker-badge', 'docker-title', 'docker-detail',
+      'warn', 'Stoppad',
+      'Docker Desktop är inte igång',
+      'Starta Docker Desktop och vänta tills motorn är redo.'
+    );
   } else {
     setCard(
       'docker-card', 'docker-dot', 'docker-badge', 'docker-title', 'docker-detail',
       'bad', 'Fel',
       'Docker svarar inte',
-      shortError(status.dockerError) + ' Starta Docker Desktop och försök igen.'
+      shortError(status.dockerError)
     );
   }
+
+  setDockerNotice(status, dockerState);
 
   if (status.masterOk) {
     const latency = status.masterLatencyMs != null ? ` · ${status.masterLatencyMs} ms` : '';
@@ -86,7 +139,14 @@ function renderStatus(status) {
     );
   }
 
-  if (status.agentRunning) {
+  if (!state.dockerReady) {
+    setCard(
+      'agent-card', 'agent-dot', 'agent-badge', 'agent-title', 'agent-detail',
+      'idle', 'Väntar',
+      'Kan inte kontrollera agenten',
+      'Docker måste vara igång innan agenten kan kontrolleras.'
+    );
+  } else if (status.agentRunning) {
     setCard(
       'agent-card', 'agent-dot', 'agent-badge', 'agent-title', 'agent-detail',
       'ok', 'Körs',
@@ -109,7 +169,16 @@ function renderStatus(status) {
     );
   }
 
-  if (status.enrollmentCompleted) {
+  if (!state.dockerReady) {
+    setCard(
+      'claim-card', 'claim-dot', 'claim-badge', 'claim-title', 'claim-detail',
+      'idle', 'Väntar',
+      'Claim-kod',
+      'Koden visas när Docker och agenten är igång.'
+    );
+    $('claim-code').textContent = '—';
+    $('copy-claim').disabled = true;
+  } else if (status.enrollmentCompleted) {
     setCard(
       'claim-card', 'claim-dot', 'claim-badge', 'claim-title', 'claim-detail',
       'ok', 'Klar',
@@ -149,9 +218,8 @@ function renderStatus(status) {
   $('master-link').href = `${(status.masterUrl || 'https://craftpilot.se').replace(/\/$/, '')}/node`;
   $('settings-note').textContent = status.busy ? 'Arbetar…' : 'Sparas lokalt';
 
-  if (status.busy !== state.busy) {
-    setBusy(status.busy);
-  }
+  state.busy = Boolean(status.busy);
+  applyControls();
 }
 
 async function refresh(includeLogs = false) {
@@ -183,19 +251,34 @@ function appendLog(message) {
   log.scrollTop = log.scrollHeight;
 }
 
+function applyControls() {
+  const canInstall = state.dockerReady && !state.busy;
+  const canManage = state.installed && state.dockerReady && !state.busy;
+
+  for (const id of ['install', 'install-panel']) {
+    $(id).disabled = !canInstall;
+  }
+  for (const id of ['update', 'stop']) {
+    $(id).disabled = !canManage;
+  }
+  $('refresh').disabled = state.busy;
+  $('open-folder').disabled = state.busy;
+  $('load-logs').disabled = state.busy || !state.installed;
+}
+
 function setBusy(busy) {
   state.busy = busy;
   document.body.classList.toggle('is-busy', busy);
-  for (const id of ['install', 'install-panel', 'update', 'stop', 'refresh', 'open-folder', 'load-logs']) {
-    const button = $(id);
-    if (button) {
-      button.disabled = busy;
-    }
-  }
+  applyControls();
 }
 
 async function runOperation(path, body, label) {
   if (state.busy) {
+    return;
+  }
+
+  if (!state.dockerReady) {
+    appendLog('Docker Desktop måste vara igång innan den här åtgärden kan köras.');
     return;
   }
 
@@ -231,6 +314,11 @@ async function runOperation(path, body, label) {
 }
 
 function install() {
+  if (!state.dockerReady) {
+    appendLog('Docker Desktop måste vara igång innan agenten kan installeras.');
+    return;
+  }
+
   const masterUrl = $('master-url').value.trim();
   const dataDir = $('data-dir').value.trim();
   runOperation('/api/install', { masterUrl, dataDir }, 'Installerar och startar agenten');

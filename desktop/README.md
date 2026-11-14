@@ -19,6 +19,10 @@ välj **Mer information → Kör ändå**. Bygg den gärna själv från källkod
 - **Settings → Advanced → Allow the default Docker socket to be used** är aktiverat.
 - Utgående HTTPS till din master, till exempel `https://craftpilot.se`.
 
+Om Docker Desktop saknas visar panelen en varningsruta med nedladdningslänk och inaktiverar
+installationen. Om Docker Desktop finns men motorn inte är igång visas i stället en uppmaning att
+starta Docker Desktop. Inga compose-filer skrivs förrän Docker är redo.
+
 ## Använd panelen
 
 1. Ange masterns URL. Den måste vara en HTTPS-origin utan sökväg.
@@ -68,6 +72,23 @@ dotnet publish desktop/CraftPilot.AgentSetup/CraftPilot.AgentSetup.csproj \
 
 `desktop.yml` kör testerna och publicerar EXE-filen som artifact på varje ändring under
 `desktop/`.
+
+## Om Docker inte fungerar
+
+**Docker Desktop saknas**
+
+Panelen visar **Docker Desktop saknas** och knappen för installation är inaktiverad. Hämta Docker
+Desktop via länken i panelen, installera med Linux-containrar och klicka på **Kontrollera igen**.
+
+**Docker Desktop är installerat men inte igång**
+
+Panelen visar **Docker Desktop är inte igång**. Starta Docker Desktop och vänta tills motorn är
+redo; panelen hittar den automatiskt inom några sekunder. Installationen är blockerad tills dess.
+
+**Docker-kommandot hittades inte trots att Docker Desktop finns**
+
+Stäng panelen, starta om Docker Desktop och öppna panelen igen. Kontrollera också att
+`docker version` fungerar i en ny terminal.
 
 ## Begränsningar
 
