@@ -7,6 +7,7 @@ using System.Text;
 using CraftPilot.AgentSetup;
 
 var builder = WebApplication.CreateBuilder(args);
+var startInTray = StartupRegistration.IsStartupInvocation(args);
 
 // The dashboard controls a privileged Docker socket. Keep it on loopback and
 // require a per-run token on every API call; the page gets the token inline.
@@ -89,16 +90,37 @@ app.MapPost("/api/quit", (IHostApplicationLifetime lifetime) =>
     return Results.Ok(new { ok = true });
 });
 
+app.MapPost("/api/startup", (StartupRequest request) =>
+{
+    try
+    {
+        StartupRegistration.SetEnabled(request.Enabled);
+        return Results.Ok(new { ok = true, enabled = StartupRegistration.IsEnabled });
+    }
+    catch (Exception ex)
+    {
+        return Results.Ok(new { ok = false, error = ex.Message });
+    }
+});
+
 await app.StartAsync();
 
 var url = app.Urls.FirstOrDefault() ?? "http://127.0.0.1:5188";
 Console.WriteLine($"CraftPilot Agent Setup UI: {url}");
-Console.WriteLine("Stäng panelens fönster för att stoppa panelen.");
+Console.WriteLine("Panelen körs i trayen. Välj Avsluta i tray-menyn för att stoppa panelen.");
 
-if (!WebViewWindow.TryShow(url, app.Lifetime))
+var setupService = app.Services.GetRequiredService<AgentSetupService>();
+if (!WebViewWindow.TryStart(url, app.Lifetime, setupService, !startInTray))
 {
-    WebViewWindow.ShowFallbackMessage();
-    OpenBrowser(url);
+    if (!startInTray)
+    {
+        WebViewWindow.ShowFallbackMessage();
+        OpenBrowser(url);
+    }
+    else
+    {
+        Console.Error.WriteLine("Panelen kunde inte starta i trayen.");
+    }
 }
 
 await app.WaitForShutdownAsync();
@@ -144,4 +166,6 @@ namespace CraftPilot.AgentSetup
     }
 
     public sealed record InstallRequest(string? MasterUrl, string? DataDir);
+
+    public sealed record StartupRequest(bool Enabled);
 }

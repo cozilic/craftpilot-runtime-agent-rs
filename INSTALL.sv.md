@@ -58,6 +58,7 @@ Fullständig Linux-guide: [GUIDE.sv.md](GUIDE.sv.md).
 3. Kör EXE:n. Panelen öppnas i ett eget Windows-fönster. Om WebView2 Runtime saknas
    öppnas den i webbläsaren i stället.
 4. Välj serverdata, klicka **Installera / starta** och kopiera claim-koden. Panelen ansluter alltid till `https://craftpilot.se`.
+5. Panelen kan starta med Windows och ligga i trayen. Bocka i **Starta med Windows** i panelen eller tray-menyn.
 
 EXE:n är osignierad, så Windows SmartScreen kan varna första gången. Välj **Mer information →
 Kör ändå**, eller bygg den själv från källkoden.

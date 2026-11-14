@@ -263,6 +263,9 @@ function renderStatus(status) {
   if (document.activeElement !== $('data-dir')) {
     $('data-dir').value = status.dataDir || '';
   }
+  if (document.activeElement !== $('startup')) {
+    $('startup').checked = Boolean(status.startupEnabled);
+  }
 
   $('install-dir').textContent = status.installDir || '—';
   $('master-link').href = 'https://craftpilot.se/node';
@@ -313,6 +316,7 @@ function applyControls() {
   }
   $('refresh').disabled = state.busy;
   $('open-folder').disabled = state.busy;
+  $('startup').disabled = state.busy;
   $('load-logs').disabled = state.busy || !state.installed;
 }
 
@@ -380,6 +384,23 @@ $('refresh').addEventListener('click', () => {
   checkVersion();
 });
 $('load-logs').addEventListener('click', loadLogs);
+
+$('startup').addEventListener('change', async () => {
+  const enabled = $('startup').checked;
+  try {
+    const result = await api('/api/startup', {
+      method: 'POST',
+      body: JSON.stringify({ enabled }),
+    });
+    if (!result.ok) {
+      throw new Error(result.error || 'Kunde inte ändra automatisk start.');
+    }
+    appendLog(enabled ? 'Panelen startar med Windows.' : 'Automatisk start avstängd.');
+  } catch (error) {
+    $('startup').checked = !enabled;
+    appendLog(`Kunde inte ändra automatisk start: ${error.message}`);
+  }
+});
 
 $('update').addEventListener('click', () => {
   runOperation('/api/update', null, 'Hämtar senaste agentimagen');

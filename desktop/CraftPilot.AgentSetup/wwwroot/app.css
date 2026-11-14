@@ -648,6 +648,39 @@ h1 span {
   font-size: 11px;
 }
 
+.check-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-top: 15px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+  cursor: pointer;
+}
+
+.check-row input {
+  width: 16px;
+  height: 16px;
+  margin: 2px 0 0;
+  accent-color: var(--accent);
+}
+
+.check-row strong,
+.check-row small {
+  display: block;
+}
+
+.check-row strong {
+  color: var(--text);
+  font-size: 12px;
+}
+
+.check-row small {
+  color: var(--faint);
+  font-size: 11px;
+}
+
 .path-line {
   margin: 15px 0 0;
   color: var(--faint);

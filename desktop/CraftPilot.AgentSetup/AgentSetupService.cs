@@ -39,6 +39,7 @@ public sealed class AgentSetupService
             DataDir = ReadSavedDataDir(),
             MasterUrl = MasterUrl.Default,
             Installed = File.Exists(ComposePath) && File.Exists(EnvPath),
+            StartupEnabled = StartupRegistration.IsEnabled,
             Busy = _session.Busy,
         };
 
@@ -601,6 +602,7 @@ public sealed class AgentSetupService
             ClaimCode = claimCode ?? source.ClaimCode,
             DataDir = source.DataDir,
             InstallDir = source.InstallDir,
+            StartupEnabled = source.StartupEnabled,
             Busy = source.Busy,
         };
 
