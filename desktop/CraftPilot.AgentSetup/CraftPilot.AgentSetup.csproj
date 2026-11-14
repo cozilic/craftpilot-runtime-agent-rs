@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>CraftPilot.AgentSetup</AssemblyName>
+    <RootNamespace>CraftPilot.AgentSetup</RootNamespace>
+    <OutputType>Exe</OutputType>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <PublishSingleFile>true</PublishSingleFile>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Content Remove="wwwroot\**\*" />
+    <EmbeddedResource Include="wwwroot\index.html" LogicalName="wwwroot.index.html" />
+    <EmbeddedResource Include="wwwroot\app.css" LogicalName="wwwroot.app.css" />
+    <EmbeddedResource Include="wwwroot\app.js" LogicalName="wwwroot.app.js" />
+    <EmbeddedResource Include="..\..\compose.desktop.yaml" LogicalName="compose.desktop.yaml" />
+  </ItemGroup>
+
+</Project>

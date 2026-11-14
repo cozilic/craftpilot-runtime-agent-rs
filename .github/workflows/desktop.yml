@@ -1,0 +1,54 @@
+name: Desktop setup
+
+on:
+  pull_request:
+    paths:
+      - "desktop/**"
+      - "compose.desktop.yaml"
+      - ".github/workflows/desktop.yml"
+  push:
+    branches: [main]
+    paths:
+      - "desktop/**"
+      - "compose.desktop.yaml"
+      - ".github/workflows/desktop.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build Windows EXE
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Test
+        run: dotnet test desktop/CraftPilot.AgentSetup.Tests/CraftPilot.AgentSetup.Tests.csproj -c Release --nologo
+
+      - name: Publish single-file EXE
+        run: >
+          dotnet publish desktop/CraftPilot.AgentSetup/CraftPilot.AgentSetup.csproj
+          -c Release
+          -r win-x64
+          --self-contained true
+          -p:PublishSingleFile=true
+          -p:EnableCompressionInSingleFile=true
+          -p:DebugType=None
+          -p:DebugSymbols=false
+          -o desktop/dist/win-x64
+
+      - name: Upload Windows EXE
+        uses: actions/upload-artifact@v4
+        with:
+          name: CraftPilotAgentSetup-win-x64
+          path: desktop/dist/win-x64/CraftPilot.AgentSetup.exe
+          if-no-files-found: error

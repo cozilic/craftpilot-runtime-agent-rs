@@ -3,6 +3,8 @@
 Den här guiden startar en Runtime Agent på en Linux-server och kopplar den till CraftPilot.
 Du behöver inte bygga något själv.
 
+> **Välj plattform:** [INSTALL.sv.md](INSTALL.sv.md) har snabbstart för både Linux och Windows.
+
 ## Innan du börjar
 
 - Linux **x86_64/amd64**. Den publicerade agentimagen är byggd för amd64.
@@ -19,6 +21,13 @@ Kör kommandona med `sudo` om din användare inte är med i `docker`-gruppen.
 
 `setup.sh` är Linux-only. Använd `compose.desktop.yaml` i stället. Det här är avsett för
 utveckling och test, inte för en 24/7-driftnod.
+
+### Windows-panel (EXE)
+
+Det finns en separat Windows-panel som gör stegen 2–5 åt dig och visar status för Docker,
+master och agent. Ladda ner `CraftPilot.AgentSetup.exe` från **Actions → Desktop setup** och
+följ [desktop/README.md](desktop/README.md). Panelen använder samma `compose.desktop.yaml` och
+körs bara lokalt på din dator.
 
 ### 1. Förbered Docker Desktop
 
