@@ -21,7 +21,7 @@ välj **Mer information → Kör ändå**. Bygg den gärna själv från källkod
 - Microsoft Edge WebView2 Runtime. Det finns normalt redan på Windows 10/11.
 - Docker Desktop med **Linux-containrar**.
 - **Settings → Advanced → Allow the default Docker socket to be used** är aktiverat.
-- Utgående HTTPS till din master, till exempel `https://craftpilot.se`.
+- Utgående HTTPS till `https://craftpilot.se`.
 
 Om WebView2 Runtime saknas visas en upplysning och panelen öppnas i den vanliga webbläsaren i
 stället. Om Docker Desktop saknas visar panelen en varningsruta med nedladdningslänk och
@@ -30,7 +30,7 @@ uppmaning att starta Docker Desktop. Inga compose-filer skrivs förrän Docker �
 
 ## Använd panelen
 
-1. Ange masterns URL. Den måste vara en HTTPS-origin utan sökväg.
+1. Panelen ansluter alltid till mastern `https://craftpilot.se`; adressen kan inte ändras.
 2. Välj mappen för serverdata. Standard är `%USERPROFILE%\CraftPilot\servers`.
 3. Klicka **Installera / starta**. Panelen skapar nätverket, hämtar agentimagen och startar
    containern.

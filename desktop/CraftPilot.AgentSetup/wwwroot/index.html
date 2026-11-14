@@ -119,9 +119,9 @@
         <div class="panel-head">
           <div>
             <p class="eyebrow">Konfiguration</p>
-            <h2 id="settings-title">Anslut till din master</h2>
+            <h2 id="settings-title">Välj var serverdata ska ligga</h2>
           </div>
-          <span class="muted" id="settings-note">Sparas lokalt</span>
+          <span class="muted" id="settings-note">Master låst</span>
         </div>
 
         <div class="notice" id="docker-notice" role="status" aria-live="polite" hidden>
@@ -135,11 +135,13 @@
         </div>
 
         <div class="form-grid">
-          <label class="field">
-            <span>Master-URL</span>
-            <input id="master-url" type="url" spellcheck="false" autocomplete="url"
-                   placeholder="https://craftpilot.se">
-          </label>
+          <div class="field">
+            <span>Master</span>
+            <div class="field-static">
+              <span class="dot dot-ok" aria-hidden="true"></span>
+              <code>https://craftpilot.se</code>
+            </div>
+          </div>
           <label class="field">
             <span>Serverdata på datorn</span>
             <input id="data-dir" type="text" spellcheck="false" autocomplete="off"
@@ -148,7 +150,7 @@
         </div>
 
         <p class="hint">
-          Använd en HTTPS-adress utan sökväg. Serverdata är den mapp där agenten ska skapa och köra dina servrar.
+          Agenten ansluter alltid till <code>https://craftpilot.se</code>. Serverdata är den mapp där agenten ska skapa och köra dina servrar.
         </p>
 
         <div class="actions">

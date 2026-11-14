@@ -29,6 +29,13 @@ public static class MasterUrl
         }
 
         normalized = uri.GetLeftPart(UriPartial.Authority).TrimEnd('/');
+        if (!string.Equals(normalized, Default, StringComparison.OrdinalIgnoreCase))
+        {
+            normalized = string.Empty;
+            error = "Endast https://craftpilot.se kan användas.";
+            return false;
+        }
+
         return true;
     }
 }

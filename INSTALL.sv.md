@@ -10,7 +10,7 @@ Docker med **Linux-containrar**.
 
 ## Gemensamt innan du börjar
 
-- En master-URL, normalt `https://craftpilot.se`.
+- Mastern `https://craftpilot.se`. Windows-panelen är låst till den adressen.
 - Utgående HTTPS från maskinen till mastern.
 - En katalog för serverdata med plats för världar och modpack.
 - Docker 27 eller senare. På Windows krävs Docker Desktop med Linux-containrar och
@@ -57,7 +57,7 @@ Fullständig Linux-guide: [GUIDE.sv.md](GUIDE.sv.md).
    Docker-socketen är aktiverad.
 3. Kör EXE:n. Panelen öppnas i ett eget Windows-fönster. Om WebView2 Runtime saknas
    öppnas den i webbläsaren i stället.
-4. Ange master-URL och serverdata, klicka **Installera / starta** och kopiera claim-koden.
+4. Välj serverdata, klicka **Installera / starta** och kopiera claim-koden. Panelen ansluter alltid till `https://craftpilot.se`.
 
 EXE:n är osignierad, så Windows SmartScreen kan varna första gången. Välj **Mer information →
 Kör ändå**, eller bygg den själv från källkoden.
