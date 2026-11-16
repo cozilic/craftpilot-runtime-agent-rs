@@ -29,100 +29,49 @@
       </div>
     </header>
 
+    <nav class="tabs" role="tablist" aria-label="Panelsektioner">
+      <button class="tab" id="tab-button-main" type="button" role="tab"
+              aria-controls="tab-main" aria-selected="true" tabindex="0">Översikt</button>
+      <button class="tab" id="tab-button-settings" type="button" role="tab"
+              aria-controls="tab-settings" aria-selected="false" tabindex="-1">Inställningar</button>
+      <button class="tab" id="tab-button-log" type="button" role="tab"
+              aria-controls="tab-log" aria-selected="false" tabindex="-1">Logg</button>
+    </nav>
+
     <main>
-      <section class="hero">
-        <div class="hero-copy">
-          <p class="eyebrow">Windows-installation</p>
-          <h1>Få agenten online.<br><span>Se allt grönt.</span></h1>
-          <p class="lede">
-            Den här panelen kontrollerar Docker, din master och agenten på samma ställe.
-            Installera, uppdatera eller stoppa agenten – utan terminal.
-          </p>
-        </div>
-        <div class="hero-actions">
-          <button class="button button-quiet" id="refresh" type="button">
-            <span class="button-icon" aria-hidden="true">↻</span>
-            Kontrollera igen
-          </button>
-          <button class="button button-primary" id="install" type="button">
-            Installera / starta
-          </button>
-        </div>
-      </section>
-
-      <section class="update-banner" id="update-banner" role="status" aria-live="polite" hidden>
-        <div class="update-copy">
-          <span class="dot dot-warn" id="update-dot" aria-hidden="true"></span>
-          <div>
-            <strong id="update-title">Ny panelversion finns</strong>
-            <p id="update-text"></p>
+      <section class="tab-panel" id="tab-main" role="tabpanel" aria-labelledby="tab-button-main">
+        <section class="hero">
+          <div class="hero-copy">
+            <p class="eyebrow">Översikt</p>
+            <h1>Din nod i ett ögonkast.<br><span>Allt grönt – då är du klar.</span></h1>
+            <p class="lede">
+              Här ser du om Docker, mastern och agenten mår bra, och vilka servrar som körs på
+              den här datorn. Inställningar och logg ligger på egna flikar.
+            </p>
           </div>
-        </div>
-        <a class="button button-primary" id="update-link" href="#" target="_blank" rel="noopener" hidden>
-          Ladda ner
-        </a>
-      </section>
-
-      <section class="status-grid" aria-label="Systemstatus">
-        <article class="status-card" id="docker-card">
-          <div class="card-head">
-            <span class="dot dot-idle" id="docker-dot" aria-hidden="true"></span>
-            <span class="card-label">Docker</span>
-            <span class="badge badge-idle" id="docker-badge">Kontrollerar</span>
+          <div class="hero-actions">
+            <button class="button button-quiet" id="refresh" type="button">
+              <span class="button-icon" aria-hidden="true">↻</span>
+              Kontrollera igen
+            </button>
+            <button class="button button-primary" id="install" type="button">
+              Installera / starta
+            </button>
           </div>
-          <h2 id="docker-title">Docker Desktop</h2>
-          <p id="docker-detail">Letar efter Docker-motorn…</p>
-          <a class="card-link" id="docker-link" href="https://www.docker.com/products/docker-desktop/" target="_blank" rel="noopener" hidden>
-            Hämta Docker Desktop <span aria-hidden="true">↗</span>
+        </section>
+
+        <section class="update-banner" id="update-banner" role="status" aria-live="polite" hidden>
+          <div class="update-copy">
+            <span class="dot dot-warn" id="update-dot" aria-hidden="true"></span>
+            <div>
+              <strong id="update-title">Ny panelversion finns</strong>
+              <p id="update-text"></p>
+            </div>
+          </div>
+          <a class="button button-primary" id="update-link" href="#" target="_blank" rel="noopener" hidden>
+            Ladda ner
           </a>
-        </article>
-
-        <article class="status-card" id="master-card">
-          <div class="card-head">
-            <span class="dot dot-idle" id="master-dot" aria-hidden="true"></span>
-            <span class="card-label">Master</span>
-            <span class="badge badge-idle" id="master-badge">Kontrollerar</span>
-          </div>
-          <h2 id="master-title">Master-host</h2>
-          <p id="master-detail">Ansluter till masters hälsokontroll…</p>
-          <a class="card-link" id="master-link" href="https://craftpilot.se/node" target="_blank" rel="noopener">
-            Öppna Min nod <span aria-hidden="true">↗</span>
-          </a>
-        </article>
-
-        <article class="status-card" id="agent-card">
-          <div class="card-head">
-            <span class="dot dot-idle" id="agent-dot" aria-hidden="true"></span>
-            <span class="card-label">Agent</span>
-            <span class="badge badge-idle" id="agent-badge">Kontrollerar</span>
-          </div>
-          <h2 id="agent-title">Runtime Agent</h2>
-          <p id="agent-detail">Letar efter agentcontainern…</p>
-        </article>
-
-        <article class="status-card status-card-claim" id="claim-card">
-          <div class="card-head">
-            <span class="dot dot-idle" id="claim-dot" aria-hidden="true"></span>
-            <span class="card-label">Anslutning</span>
-            <span class="badge badge-idle" id="claim-badge">Väntar</span>
-          </div>
-          <h2 id="claim-title">Claim-kod</h2>
-          <p id="claim-detail">Koden visas när agenten har startat.</p>
-          <div class="claim-row">
-            <code id="claim-code">—</code>
-            <button class="copy-button" id="copy-claim" type="button" disabled>Kopiera</button>
-          </div>
-        </article>
-      </section>
-
-      <section class="panel" aria-labelledby="settings-title">
-        <div class="panel-head">
-          <div>
-            <p class="eyebrow">Konfiguration</p>
-            <h2 id="settings-title">Välj var serverdata ska ligga</h2>
-          </div>
-          <span class="muted" id="settings-note">Master låst</span>
-        </div>
+        </section>
 
         <div class="notice" id="docker-notice" role="status" aria-live="polite" hidden>
           <div class="notice-copy">
@@ -134,57 +83,138 @@
           </a>
         </div>
 
-        <div class="form-grid">
-          <div class="field">
-            <span>Master</span>
-            <div class="field-static">
-              <span class="dot dot-ok" aria-hidden="true"></span>
-              <code>https://craftpilot.se</code>
+        <section class="status-grid" aria-label="Systemstatus">
+          <article class="status-card" id="docker-card">
+            <div class="card-head">
+              <span class="dot dot-idle" id="docker-dot" aria-hidden="true"></span>
+              <span class="card-label">Docker</span>
+              <span class="badge badge-idle" id="docker-badge">Kontrollerar</span>
             </div>
+            <h2 id="docker-title">Docker Desktop</h2>
+            <p id="docker-detail">Letar efter Docker-motorn…</p>
+            <a class="card-link" id="docker-link" href="https://www.docker.com/products/docker-desktop/" target="_blank" rel="noopener" hidden>
+              Hämta Docker Desktop <span aria-hidden="true">↗</span>
+            </a>
+          </article>
+
+          <article class="status-card" id="master-card">
+            <div class="card-head">
+              <span class="dot dot-idle" id="master-dot" aria-hidden="true"></span>
+              <span class="card-label">Master</span>
+              <span class="badge badge-idle" id="master-badge">Kontrollerar</span>
+            </div>
+            <h2 id="master-title">Master-host</h2>
+            <p id="master-detail">Ansluter till masters hälsokontroll…</p>
+            <a class="card-link" id="master-link" href="https://craftpilot.se/node" target="_blank" rel="noopener">
+              Öppna Min nod <span aria-hidden="true">↗</span>
+            </a>
+          </article>
+
+          <article class="status-card" id="agent-card">
+            <div class="card-head">
+              <span class="dot dot-idle" id="agent-dot" aria-hidden="true"></span>
+              <span class="card-label">Agent</span>
+              <span class="badge badge-idle" id="agent-badge">Kontrollerar</span>
+            </div>
+            <h2 id="agent-title">Runtime Agent</h2>
+            <p id="agent-detail">Letar efter agentcontainern…</p>
+          </article>
+
+          <article class="status-card status-card-claim" id="claim-card">
+            <div class="card-head">
+              <span class="dot dot-idle" id="claim-dot" aria-hidden="true"></span>
+              <span class="card-label">Anslutning</span>
+              <span class="badge badge-idle" id="claim-badge">Väntar</span>
+            </div>
+            <h2 id="claim-title">Claim-kod</h2>
+            <p id="claim-detail">Koden visas när agenten har startat.</p>
+            <div class="claim-row">
+              <code id="claim-code">—</code>
+              <button class="copy-button" id="copy-claim" type="button" disabled>Kopiera</button>
+            </div>
+          </article>
+        </section>
+
+        <section class="panel servers-panel" aria-labelledby="servers-title">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow">Servrar</p>
+              <h2 id="servers-title">Servrar på den här noden</h2>
+            </div>
+            <span class="badge badge-idle" id="servers-count">0</span>
           </div>
-          <label class="field">
-            <span>Serverdata på datorn</span>
-            <input id="data-dir" type="text" spellcheck="false" autocomplete="off"
-                   placeholder="C:\Users\du\CraftPilot\servers">
-          </label>
-        </div>
-
-        <p class="hint">
-          Agenten ansluter alltid till <code>https://craftpilot.se</code>. Serverdata är den mapp där agenten ska skapa och köra dina servrar.
-          Rust-agenten kör servrarna som Docker-containrar, så Docker Desktop måste vara igång – det finns ingen Docker-fri start.
-        </p>
-
-        <div class="actions">
-          <button class="button button-primary" id="install-panel" type="button">Installera / starta</button>
-          <button class="button button-quiet" id="update" type="button">Uppdatera</button>
-          <button class="button button-quiet button-danger" id="stop" type="button">Stoppa</button>
-          <button class="button button-quiet" id="cancel" type="button" disabled>Avbryt</button>
-          <button class="button button-quiet button-danger" id="remove" type="button">Ta bort</button>
-          <button class="button button-link" id="open-folder" type="button">Öppna installationsmapp</button>
-        </div>
-
-        <label class="check-row" for="startup">
-          <input id="startup" type="checkbox">
-          <span>
-            <strong>Starta med Windows</strong>
-            <small>Panelen startar i trayen när du loggar in.</small>
-          </span>
-        </label>
-
-        <p class="path-line">
-          Installationsfiler: <code id="install-dir">—</code>
-        </p>
+          <p class="server-empty" id="servers-empty">
+            Här listas de servrar som agenten kör på den här datorn. Skapa en server i panelen på
+            craftpilot.se – så dyker den upp här med status.
+          </p>
+          <ul class="server-list" id="servers-list" hidden></ul>
+        </section>
       </section>
 
-      <section class="panel log-panel" aria-labelledby="log-title">
-        <div class="panel-head">
-          <div>
-            <p class="eyebrow">Senaste händelser</p>
-            <h2 id="log-title">Logg</h2>
+      <section class="tab-panel" id="tab-settings" role="tabpanel" aria-labelledby="tab-button-settings" hidden>
+        <section class="panel" aria-labelledby="settings-title">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow">Inställningar</p>
+              <h2 id="settings-title">Var serverna ska ligga</h2>
+            </div>
+            <span class="muted" id="settings-note">Master låst</span>
           </div>
-          <button class="button button-link" id="load-logs" type="button">Visa agentlogg</button>
-        </div>
-        <pre id="log" class="log" aria-live="polite">Startar panelen…</pre>
+
+          <div class="form-grid">
+            <div class="field">
+              <span>Master</span>
+              <div class="field-static">
+                <span class="dot dot-ok" aria-hidden="true"></span>
+                <code>https://craftpilot.se</code>
+              </div>
+            </div>
+            <label class="field">
+              <span>Serverdata på datorn</span>
+              <input id="data-dir" type="text" spellcheck="false" autocomplete="off"
+                     placeholder="C:\Users\du\CraftPilot\servers">
+            </label>
+          </div>
+
+          <p class="hint">
+            Agenten ansluter alltid till <code>https://craftpilot.se</code>. Serverdata är mappen där agenten skapar och kör dina servrar.
+            Rust-agenten kör servrarna som Docker-containrar, så Docker Desktop måste vara igång – det finns ingen Docker-fri start.
+          </p>
+
+          <div class="actions">
+            <button class="button button-primary" id="install-panel" type="button">Installera / starta</button>
+            <button class="button button-quiet" id="update" type="button">Uppdatera</button>
+            <button class="button button-quiet button-danger" id="stop" type="button">Stoppa</button>
+            <button class="button button-quiet" id="cancel" type="button" disabled>Avbryt</button>
+            <button class="button button-quiet button-danger" id="remove" type="button">Ta bort</button>
+            <button class="button button-link" id="open-folder" type="button">Öppna installationsmapp</button>
+          </div>
+
+          <label class="check-row" for="startup">
+            <input id="startup" type="checkbox">
+            <span>
+              <strong>Starta med Windows</strong>
+              <small>Panelen startar i trayen när du loggar in.</small>
+            </span>
+          </label>
+
+          <p class="path-line">
+            Installationsfiler: <code id="install-dir">—</code>
+          </p>
+        </section>
+      </section>
+
+      <section class="tab-panel" id="tab-log" role="tabpanel" aria-labelledby="tab-button-log" hidden>
+        <section class="panel log-panel" aria-labelledby="log-title">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow">Senaste händelser</p>
+              <h2 id="log-title">Logg</h2>
+            </div>
+            <button class="button button-link" id="load-logs" type="button">Visa agentlogg</button>
+          </div>
+          <pre id="log" class="log" aria-live="polite">Startar panelen…</pre>
+        </section>
       </section>
     </main>
 

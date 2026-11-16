@@ -30,6 +30,9 @@ public sealed class StatusResponse
     public string InstallDir { get; init; } = string.Empty;
     public bool StartupEnabled { get; init; }
     public bool Busy { get; init; }
+
+    /// Servercontainrar som agenten kör på den här datorn.
+    public IReadOnlyList<ServerContainer> Servers { get; init; } = [];
 }
 
 public sealed record OperationResponse(

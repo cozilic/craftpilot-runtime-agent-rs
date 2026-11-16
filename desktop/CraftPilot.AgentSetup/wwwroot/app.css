@@ -820,3 +820,123 @@ h1 span {
     transition: none !important;
   }
 }
+
+/* Flikarna: samma innehåll som förut, men uppdelat i Översikt, Inställningar
+   och Logg så första vyn bara visar status. */
+[hidden] {
+  display: none !important;
+}
+
+.tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  width: fit-content;
+  margin: 0 0 22px;
+  padding: 5px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--panel);
+  backdrop-filter: blur(12px);
+}
+
+.tab {
+  border: 0;
+  border-radius: 999px;
+  padding: 9px 20px;
+  background: transparent;
+  color: var(--muted);
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  transition: color 0.15s ease, background 0.15s ease;
+}
+
+.tab:hover {
+  color: var(--text);
+}
+
+.tab[aria-selected="true"] {
+  background: var(--panel-strong);
+  color: var(--text);
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+
+.tab:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.tab-panel {
+  display: block;
+}
+
+.servers-panel {
+  margin-top: 20px;
+}
+
+.server-list {
+  list-style: none;
+  margin: 18px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.server-row {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  border: 1px solid var(--border-soft);
+  border-radius: 14px;
+  background: var(--panel-strong);
+}
+
+.server-main {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.server-name {
+  font-weight: 600;
+}
+
+.server-image {
+  overflow: hidden;
+  color: var(--faint);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.8rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.server-empty {
+  margin: 16px 0 0;
+  color: var(--muted);
+  max-width: 62ch;
+}
+
+@media (max-width: 620px) {
+  .tabs {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .tab {
+    flex: 1 1 auto;
+    padding: 9px 12px;
+  }
+
+  .server-row {
+    grid-template-columns: auto 1fr;
+    row-gap: 8px;
+  }
+
+  .server-row .badge {
+    grid-column: 2;
+    justify-self: start;
+  }
+}

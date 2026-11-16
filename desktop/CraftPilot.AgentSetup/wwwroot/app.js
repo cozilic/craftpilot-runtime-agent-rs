@@ -279,6 +279,8 @@ function renderStatus(status) {
   $('master-link').href = 'https://craftpilot.se/node';
   $('settings-note').textContent = status.busy ? 'Arbetar…' : 'Master låst';
 
+  renderServers(status);
+
   state.busy = Boolean(status.busy);
   applyControls();
 }
@@ -333,6 +335,141 @@ function applyControls() {
   $('load-logs').disabled = state.busy || !state.installed;
 }
 
+const TAB_IDS = ['main', 'settings', 'log'];
+const TAB_STORAGE_KEY = 'craftpilot-tab';
+
+// Byter flik och speglar valet i aria-attributen, så både mus, tangentbord
+// och skärmläsare hamnar på samma ställe.
+function selectTab(name, options = {}) {
+  const target = TAB_IDS.includes(name) ? name : 'main';
+
+  for (const tab of TAB_IDS) {
+    const button = $(`tab-button-${tab}`);
+    const panel = $(`tab-${tab}`);
+    if (!button || !panel) {
+      continue;
+    }
+
+    const selected = tab === target;
+    button.setAttribute('aria-selected', selected ? 'true' : 'false');
+    button.tabIndex = selected ? 0 : -1;
+    panel.hidden = !selected;
+  }
+
+  try {
+    window.localStorage.setItem(TAB_STORAGE_KEY, target);
+  } catch {
+    // localStorage kan vara avstängt i WebView2; fliken fungerar ändå.
+  }
+
+  if (options.focus) {
+    $(`tab-button-${target}`)?.focus();
+  }
+}
+
+function setupTabs() {
+  for (const tab of TAB_IDS) {
+    const button = $(`tab-button-${tab}`);
+    if (!button) {
+      continue;
+    }
+
+    button.addEventListener('click', () => selectTab(tab));
+    button.addEventListener('keydown', (event) => {
+      const index = TAB_IDS.indexOf(tab);
+      if (event.key === 'ArrowRight' || event.key === 'ArrowLeft') {
+        event.preventDefault();
+        const step = event.key === 'ArrowRight' ? 1 : TAB_IDS.length - 1;
+        selectTab(TAB_IDS[(index + step) % TAB_IDS.length], { focus: true });
+      } else if (event.key === 'Home' || event.key === 'End') {
+        event.preventDefault();
+        selectTab(event.key === 'Home' ? TAB_IDS[0] : TAB_IDS[TAB_IDS.length - 1], { focus: true });
+      }
+    });
+  }
+
+  let saved = null;
+  try {
+    saved = window.localStorage.getItem(TAB_STORAGE_KEY);
+  } catch {
+    // Utan sparat val börjar panelen på Översikt.
+  }
+
+  selectTab(saved ?? 'main');
+}
+
+const SERVER_STATES = {
+  running: { label: 'Körs', kind: 'ok' },
+  restarting: { label: 'Startar om', kind: 'warn' },
+  paused: { label: 'Pausad', kind: 'warn' },
+  exited: { label: 'Stoppad', kind: 'idle' },
+  created: { label: 'Skapad', kind: 'idle' },
+  dead: { label: 'Kraschad', kind: 'bad' },
+};
+
+function serverRow(server) {
+  const info = SERVER_STATES[server.state] ?? {
+    label: server.state ? server.state : 'Okänd',
+    kind: 'idle',
+  };
+
+  const item = document.createElement('li');
+  item.className = 'server-row';
+
+  const dot = document.createElement('span');
+  dot.className = `dot dot-${info.kind}`;
+  dot.setAttribute('aria-hidden', 'true');
+
+  const main = document.createElement('div');
+  main.className = 'server-main';
+
+  const name = document.createElement('span');
+  name.className = 'server-name';
+  name.textContent = `Server ${server.shortId || server.serverId}`;
+
+  const image = document.createElement('span');
+  image.className = 'server-image';
+  image.textContent = `${server.name} · ${server.image}`;
+
+  main.append(name, image);
+
+  const badge = document.createElement('span');
+  badge.className = `badge badge-${info.kind}`;
+  badge.textContent = info.label;
+
+  item.append(dot, main, badge);
+  return item;
+}
+
+// Serverlistan kommer från agentens Docker-containrar (label craftpilot.managed),
+// så den visar vad noden faktiskt hostar just nu.
+function renderServers(status) {
+  const list = $('servers-list');
+  const empty = $('servers-empty');
+  const count = $('servers-count');
+  if (!list || !empty || !count) {
+    return;
+  }
+
+  const servers = Array.isArray(status.servers) ? status.servers : [];
+  const running = servers.filter((server) => server.state === 'running' || server.running).length;
+
+  count.textContent = `${running}/${servers.length}`;
+  count.title = `${running} av ${servers.length} servrar körs`;
+  count.className = servers.length === 0
+    ? 'badge badge-idle'
+    : running === servers.length
+      ? 'badge badge-ok'
+      : 'badge badge-warn';
+
+  list.replaceChildren(...servers.map(serverRow));
+  list.hidden = servers.length === 0;
+  empty.hidden = servers.length > 0;
+  empty.textContent = status.dockerOk === false
+    ? 'Serverlistan kan inte läsas förrän Docker Desktop är igång.'
+    : 'Här listas de servrar som agenten kör på den här datorn. Skapa en server i panelen på craftpilot.se – så dyker den upp här med status.';
+}
+
 function setBusy(busy) {
   state.busy = busy;
   document.body.classList.toggle('is-busy', busy);
@@ -350,6 +487,8 @@ async function runOperation(path, body, label) {
   }
 
   setBusy(true);
+  // Åtgärden skriver sin utdata i loggen: visa den fliken direkt.
+  selectTab('log');
   appendLog(`\n> ${label}…`);
 
   try {
@@ -484,6 +623,7 @@ $('quit').addEventListener('click', async () => {
   window.close();
 });
 
+setupTabs();
 refresh(true);
 checkVersion();
 window.setInterval(() => {
