@@ -78,6 +78,13 @@ app.MapPost("/api/update", async (AgentSetupService service, CancellationToken c
 app.MapPost("/api/stop", async (AgentSetupService service, CancellationToken ct) =>
     Results.Ok(await service.StopAsync(ct)));
 
+app.MapPost("/api/remove", async (AgentSetupService service, CancellationToken ct) =>
+    Results.Ok(await service.RemoveAsync(ct)));
+
+// Avbryter en pågående docker-åtgärd (installera, uppdatera, stoppa, ta bort).
+app.MapPost("/api/cancel", (SetupSession session) =>
+    Results.Ok(new { ok = session.Cancel() }));
+
 app.MapPost("/api/open-folder", (AgentSetupService service) =>
 {
     service.OpenInstallFolder();
@@ -160,9 +167,53 @@ namespace CraftPilot.AgentSetup
 {
     public sealed class SetupSession
     {
+        private readonly object operationGate = new();
+        private CancellationTokenSource? operation;
+
         public string Token { get; } = Convert.ToHexString(RandomNumberGenerator.GetBytes(16));
         public SemaphoreSlim OperationLock { get; } = new(1, 1);
         public volatile bool Busy;
+
+        /// Startar en avbrytbar åtgärd. Tokenen avbryts av /api/cancel eller när
+        /// anropet från panelen avbryts (t.ex. att fönstret stängs).
+        public CancellationTokenSource BeginOperation(CancellationToken ct)
+        {
+            var linked = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            lock (operationGate)
+            {
+                operation = linked;
+            }
+
+            return linked;
+        }
+
+        public void EndOperation(CancellationTokenSource finished)
+        {
+            lock (operationGate)
+            {
+                if (ReferenceEquals(operation, finished))
+                {
+                    operation = null;
+                }
+            }
+
+            finished.Dispose();
+        }
+
+        /// Avbryter den pågående åtgärden. False när inget kör.
+        public bool Cancel()
+        {
+            lock (operationGate)
+            {
+                if (operation is null)
+                {
+                    return false;
+                }
+
+                operation.Cancel();
+                return true;
+            }
+        }
     }
 
     public sealed record InstallRequest(string? MasterUrl, string? DataDir);

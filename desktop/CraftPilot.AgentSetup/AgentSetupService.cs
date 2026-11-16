@@ -110,6 +110,8 @@ public sealed class AgentSetupService
                 null,
                 ct);
 
+            status = CopyStatus(status, agentExists: inspect.ExitCode == 0);
+
             if (inspect.ExitCode == 0)
             {
                 var parts = inspect.StdOut.Trim().Split('\t', 2);
@@ -138,96 +140,45 @@ public sealed class AgentSetupService
         return status;
     }
 
-    public async Task<OperationResponse> InstallAsync(InstallRequest request, CancellationToken ct = default)
+    public Task<OperationResponse> InstallAsync(InstallRequest request, CancellationToken ct = default) =>
+        RunOperationAsync((output, token) => InstallCoreAsync(request, output, token), ct);
+
+    public Task<OperationResponse> UpdateAsync(CancellationToken ct = default) =>
+        RunOperationAsync(UpdateCoreAsync, ct);
+
+    public Task<OperationResponse> StopAsync(CancellationToken ct = default) =>
+        RunOperationAsync(StopCoreAsync, ct);
+
+    /// Tar bort agenten från datorn: containern, installationsfilerna och
+    /// kopplingen till noden. Serverdata och agentens state-volym lämnas kvar,
+    /// så en ny installation kan återanvända credentialen.
+    public Task<OperationResponse> RemoveAsync(CancellationToken ct = default) =>
+        RunOperationAsync(RemoveCoreAsync, ct);
+
+    /// Kör en åtgärd med operation-lås, busy-flagga och Avbryt-stöd. Alla
+    /// åtgärder går genom den här vägen, så panelen aldrig kan fastna i ett
+    /// läge där en knapp är disabled utan motstycke.
+    private async Task<OperationResponse> RunOperationAsync(
+        Func<StringBuilder, CancellationToken, Task<OperationResponse>> action,
+        CancellationToken ct)
     {
-        await _session.OperationLock.WaitAsync(ct);
-        _session.Busy = true;
         var output = new StringBuilder();
+        var operation = _session.BeginOperation(ct);
 
         try
         {
-            if (!MasterUrl.TryNormalize(request.MasterUrl ?? MasterUrl.Default, out var master, out var error))
-            {
-                return Fail(error, output);
-            }
+            await _session.OperationLock.WaitAsync(operation.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            _session.EndOperation(operation);
+            return Fail("Åtgärden avbröts.", output);
+        }
 
-            var docker = await CheckDockerAsync(ct);
-            if (docker.State != DockerStateClassifier.Ready)
-            {
-                if (!string.IsNullOrWhiteSpace(docker.Error))
-                {
-                    output.AppendLine(docker.Error);
-                }
-
-                return Fail(DockerGuidance(docker.State), output);
-            }
-
-            string dataDirectory;
-            try
-            {
-                dataDirectory = Path.GetFullPath(
-                    string.IsNullOrWhiteSpace(request.DataDir) ? DefaultDataDirectory : request.DataDir.Trim());
-                Directory.CreateDirectory(InstallDirectory);
-                Directory.CreateDirectory(dataDirectory);
-            }
-            catch (Exception ex)
-            {
-                return Fail($"Kunde inte skapa katalogerna: {ex.Message}", output);
-            }
-
-            WriteCompose();
-            await File.WriteAllTextAsync(
-                EnvPath,
-                DesktopConfig.BuildEnvFile(dataDirectory),
-                new UTF8Encoding(false),
-                ct);
-
-            output.AppendLine($"Master: {master}");
-            output.AppendLine($"Serverdata: {dataDirectory}");
-            output.AppendLine();
-
-            var network = await RunAsync(
-                "docker",
-                ["network", "inspect", NetworkName],
-                TimeSpan.FromSeconds(10),
-                null,
-                ct);
-
-            if (network.ExitCode != 0)
-            {
-                var create = await RunAsync(
-                    "docker",
-                    ["network", "create", NetworkName],
-                    TimeSpan.FromSeconds(20),
-                    null,
-                    ct);
-                Append(output, create);
-                if (create.ExitCode != 0)
-                {
-                    return Fail($"Kunde inte skapa Docker-nätverket {NetworkName}.", output);
-                }
-            }
-            else
-            {
-                output.AppendLine($"Docker-nätverket {NetworkName} finns redan.");
-            }
-
-            var pull = await ComposeAsync(["pull"], TimeSpan.FromMinutes(5), ct);
-            Append(output, pull);
-            if (pull.ExitCode != 0)
-            {
-                return Fail("Kunde inte hämta agentimagen.", output);
-            }
-
-            var up = await ComposeAsync(["up", "-d"], TimeSpan.FromMinutes(2), ct);
-            Append(output, up);
-            if (up.ExitCode != 0)
-            {
-                return Fail("Kunde inte starta agenten.", output);
-            }
-
-            await Task.Delay(TimeSpan.FromSeconds(2.5), ct);
-            return new OperationResponse(true, output.ToString().Trim(), null, await GetStatusAsync(ct));
+        _session.Busy = true;
+        try
+        {
+            return await action(output, operation.Token);
         }
         catch (OperationCanceledException)
         {
@@ -237,99 +188,260 @@ public sealed class AgentSetupService
         {
             _session.Busy = false;
             _session.OperationLock.Release();
+            _session.EndOperation(operation);
         }
     }
 
-    public async Task<OperationResponse> UpdateAsync(CancellationToken ct = default)
+    private async Task<OperationResponse> InstallCoreAsync(
+        InstallRequest request,
+        StringBuilder output,
+        CancellationToken ct)
     {
-        await _session.OperationLock.WaitAsync(ct);
-        _session.Busy = true;
-        var output = new StringBuilder();
+        if (!MasterUrl.TryNormalize(request.MasterUrl ?? MasterUrl.Default, out var master, out var error))
+        {
+            return Fail(error, output);
+        }
 
+        var docker = await CheckDockerAsync(ct);
+        if (docker.State != DockerStateClassifier.Ready)
+        {
+            if (!string.IsNullOrWhiteSpace(docker.Error))
+            {
+                output.AppendLine(docker.Error);
+            }
+
+            return Fail(DockerGuidance(docker.State), output);
+        }
+
+        string dataDirectory;
         try
         {
-            if (!File.Exists(ComposePath) || !File.Exists(EnvPath))
-            {
-                return Fail("Agenten är inte installerad ännu.", output);
-            }
-
-            await File.WriteAllTextAsync(
-                EnvPath,
-                DesktopConfig.BuildEnvFile(ReadSavedDataDir()),
-                new UTF8Encoding(false),
-                ct);
-
-            var docker = await CheckDockerAsync(ct);
-            if (docker.State != DockerStateClassifier.Ready)
-            {
-                return Fail(DockerGuidance(docker.State), output);
-            }
-
-            var pull = await ComposeAsync(["pull"], TimeSpan.FromMinutes(5), ct);
-            Append(output, pull);
-            if (pull.ExitCode != 0)
-            {
-                return Fail("Kunde inte hämta den senaste agentimagen.", output);
-            }
-
-            var up = await ComposeAsync(["up", "-d"], TimeSpan.FromMinutes(2), ct);
-            Append(output, up);
-            if (up.ExitCode != 0)
-            {
-                return Fail("Kunde inte starta om agenten.", output);
-            }
-
-            await Task.Delay(TimeSpan.FromSeconds(1.5), ct);
-            return new OperationResponse(true, output.ToString().Trim(), null, await GetStatusAsync(ct));
+            dataDirectory = Path.GetFullPath(
+                string.IsNullOrWhiteSpace(request.DataDir) ? DefaultDataDirectory : request.DataDir.Trim());
+            Directory.CreateDirectory(InstallDirectory);
+            Directory.CreateDirectory(dataDirectory);
         }
-        catch (OperationCanceledException)
+        catch (Exception ex)
         {
-            return Fail("Åtgärden avbröts.", output);
+            return Fail($"Kunde inte skapa katalogerna: {ex.Message}", output);
         }
-        finally
+
+        WriteCompose();
+        await File.WriteAllTextAsync(
+            EnvPath,
+            DesktopConfig.BuildEnvFile(dataDirectory),
+            new UTF8Encoding(false),
+            ct);
+
+        output.AppendLine($"Master: {master}");
+        output.AppendLine($"Serverdata: {dataDirectory}");
+        output.AppendLine();
+
+        if (!await EnsureNetworkAsync(output, ct))
         {
-            _session.Busy = false;
-            _session.OperationLock.Release();
+            return Fail($"Kunde inte skapa Docker-nätverket {NetworkName}.", output);
         }
+
+        var pull = await ComposeAsync(["pull"], TimeSpan.FromMinutes(5), ct);
+        Append(output, pull);
+        if (pull.ExitCode != 0)
+        {
+            return Fail("Kunde inte hämta agentimagen.", output);
+        }
+
+        if (await StartAgentAsync(output, ct) != 0)
+        {
+            return Fail("Kunde inte starta agenten.", output);
+        }
+
+        await Task.Delay(TimeSpan.FromSeconds(2.5), ct);
+        return new OperationResponse(true, output.ToString().Trim(), null, await GetStatusAsync(ct));
     }
 
-    public async Task<OperationResponse> StopAsync(CancellationToken ct = default)
+    private async Task<OperationResponse> UpdateCoreAsync(StringBuilder output, CancellationToken ct)
     {
-        await _session.OperationLock.WaitAsync(ct);
-        _session.Busy = true;
-        var output = new StringBuilder();
-
-        try
+        if (!File.Exists(ComposePath) || !File.Exists(EnvPath))
         {
-            if (!File.Exists(ComposePath) || !File.Exists(EnvPath))
-            {
-                return Fail("Agenten är inte installerad ännu.", output);
-            }
+            return Fail("Agenten är inte installerad ännu.", output);
+        }
 
-            var docker = await CheckDockerAsync(ct);
-            if (docker.State != DockerStateClassifier.Ready)
-            {
-                return Fail(DockerGuidance(docker.State), output);
-            }
+        await File.WriteAllTextAsync(
+            EnvPath,
+            DesktopConfig.BuildEnvFile(ReadSavedDataDir()),
+            new UTF8Encoding(false),
+            ct);
 
-            var down = await ComposeAsync(["down"], TimeSpan.FromMinutes(2), ct);
+        var docker = await CheckDockerAsync(ct);
+        if (docker.State != DockerStateClassifier.Ready)
+        {
+            return Fail(DockerGuidance(docker.State), output);
+        }
+
+        var pull = await ComposeAsync(["pull"], TimeSpan.FromMinutes(5), ct);
+        Append(output, pull);
+        if (pull.ExitCode != 0)
+        {
+            return Fail("Kunde inte hämta den senaste agentimagen.", output);
+        }
+
+        if (await StartAgentAsync(output, ct) != 0)
+        {
+            return Fail("Kunde inte starta om agenten.", output);
+        }
+
+        await Task.Delay(TimeSpan.FromSeconds(1.5), ct);
+        return new OperationResponse(true, output.ToString().Trim(), null, await GetStatusAsync(ct));
+    }
+
+    private async Task<OperationResponse> StopCoreAsync(StringBuilder output, CancellationToken ct)
+    {
+        var docker = await CheckDockerAsync(ct);
+        if (docker.State != DockerStateClassifier.Ready)
+        {
+            return Fail(DockerGuidance(docker.State), output);
+        }
+
+        if (File.Exists(ComposePath) && File.Exists(EnvPath))
+        {
+            var down = await ComposeAsync(["down", "--remove-orphans"], TimeSpan.FromMinutes(2), ct);
             Append(output, down);
             if (down.ExitCode != 0)
             {
                 return Fail("Kunde inte stoppa agenten.", output);
             }
+        }
 
-            return new OperationResponse(true, output.ToString().Trim(), null, await GetStatusAsync(ct));
-        }
-        catch (OperationCanceledException)
+        // En container som skapats av ett annat projekt stoppas inte av
+        // `compose down`, så den tas bort här också.
+        if (!await RemoveContainerAsync(output, ct))
         {
-            return Fail("Åtgärden avbröts.", output);
+            return Fail("Kunde inte ta bort agentcontainern.", output);
         }
-        finally
+
+        return new OperationResponse(true, output.ToString().Trim(), null, await GetStatusAsync(ct));
+    }
+
+    private async Task<OperationResponse> RemoveCoreAsync(StringBuilder output, CancellationToken ct)
+    {
+        var docker = await CheckDockerAsync(ct);
+        if (docker.State != DockerStateClassifier.Ready)
         {
-            _session.Busy = false;
-            _session.OperationLock.Release();
+            return Fail(DockerGuidance(docker.State), output);
         }
+
+        if (File.Exists(ComposePath) && File.Exists(EnvPath))
+        {
+            var down = await ComposeAsync(["down", "--remove-orphans"], TimeSpan.FromMinutes(2), ct);
+            Append(output, down);
+        }
+
+        if (!await RemoveContainerAsync(output, ct))
+        {
+            return Fail("Kunde inte ta bort agentcontainern.", output);
+        }
+
+        foreach (var file in new[] { ComposePath, EnvPath })
+        {
+            try
+            {
+                if (File.Exists(file))
+                {
+                    File.Delete(file);
+                }
+            }
+            catch (Exception ex)
+            {
+                return Fail($"Kunde inte ta bort {file}: {ex.Message}", output);
+            }
+        }
+
+        output.AppendLine("Agenten är borttagen från datorn. Serverdata ligger kvar, liksom agentens state-volym.");
+        return new OperationResponse(true, output.ToString().Trim(), null, await GetStatusAsync(ct));
+    }
+
+    private async Task<bool> EnsureNetworkAsync(StringBuilder output, CancellationToken ct)
+    {
+        var network = await RunAsync(
+            "docker",
+            ["network", "inspect", NetworkName],
+            TimeSpan.FromSeconds(10),
+            null,
+            ct);
+
+        if (network.ExitCode == 0)
+        {
+            output.AppendLine($"Docker-nätverket {NetworkName} finns redan.");
+            return true;
+        }
+
+        var create = await RunAsync(
+            "docker",
+            ["network", "create", NetworkName],
+            TimeSpan.FromSeconds(20),
+            null,
+            ct);
+
+        Append(output, create);
+        return create.ExitCode == 0;
+    }
+
+    /// Startar agenten, men tar först bort en kvarvarande container med samma
+    /// namn.
+    ///
+    /// Compose återanvänder aldrig ett container-namn som skapats av ett annat
+    /// projekt (en tidigare installation, `runtime-agent/start-rs-agent.ps1`
+    /// eller en annan compose-fil): då faller `up` med "is already in use by
+    /// container". Namnet ägs av panelen, så en gammal container tas bort
+    /// först. Utan det fastnar installationen helt — det finns ingen knapp som
+    /// tar bort den.
+    private async Task<int> StartAgentAsync(StringBuilder output, CancellationToken ct)
+    {
+        if (!await RemoveContainerAsync(output, ct))
+        {
+            return -1;
+        }
+
+        var up = await ComposeAsync(["up", "-d"], TimeSpan.FromMinutes(2), ct);
+        Append(output, up);
+        if (up.ExitCode != 0 && ComposeConflict.IsNameConflict(up.Combined))
+        {
+            output.AppendLine("Containernamnet krockade — tar bort den gamla containern och försöker igen.");
+            if (!await RemoveContainerAsync(output, ct))
+            {
+                return -1;
+            }
+
+            up = await ComposeAsync(["up", "-d"], TimeSpan.FromMinutes(2), ct);
+            Append(output, up);
+        }
+
+        return up.ExitCode;
+    }
+
+    private async Task<bool> RemoveContainerAsync(StringBuilder output, CancellationToken ct)
+    {
+        var inspect = await RunAsync(
+            "docker",
+            ["inspect", "--format", "{{.Id}}", ContainerName],
+            TimeSpan.FromSeconds(10),
+            null,
+            ct);
+
+        if (inspect.ExitCode != 0)
+        {
+            return true;
+        }
+
+        output.AppendLine($"Tar bort en kvarvarande container med namnet {ContainerName}.");
+        var remove = await RunAsync(
+            "docker",
+            ["rm", "-f", ContainerName],
+            TimeSpan.FromMinutes(1),
+            null,
+            ct);
+
+        Append(output, remove);
+        return remove.ExitCode == 0;
     }
 
     public async Task<string> GetLogsAsync(CancellationToken ct = default)
@@ -575,6 +687,7 @@ public sealed class AgentSetupService
         long? masterLatencyMs = null,
         string? masterError = null,
         bool? agentRunning = null,
+        bool? agentExists = null,
         string? agentStatus = null,
         string? agentImage = null,
         string? agentError = null,
@@ -594,6 +707,7 @@ public sealed class AgentSetupService
             MasterError = masterError ?? source.MasterError,
             MasterUrl = source.MasterUrl,
             AgentRunning = agentRunning ?? source.AgentRunning,
+            AgentExists = agentExists ?? source.AgentExists,
             AgentStatus = agentStatus ?? source.AgentStatus,
             AgentImage = agentImage ?? source.AgentImage,
             AgentError = agentError ?? source.AgentError,

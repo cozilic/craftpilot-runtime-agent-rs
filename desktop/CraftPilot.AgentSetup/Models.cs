@@ -16,6 +16,9 @@ public sealed class StatusResponse
     public string MasterUrl { get; init; } = global::CraftPilot.AgentSetup.MasterUrl.Default;
 
     public bool AgentRunning { get; init; }
+    /// Sant när en container med panelens namn finns, även om panelen själv
+    /// saknar compose/env (t.ex. efter en installation med ett annat verktyg).
+    public bool AgentExists { get; init; }
     public string? AgentStatus { get; init; }
     public string? AgentImage { get; init; }
     public string? AgentError { get; init; }
