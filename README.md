@@ -167,19 +167,19 @@ For Docker Desktop on macOS or Windows, use `compose.desktop.yaml`; see
 
 ### Update a node
 
-`compose.yaml`, `compose.desktop.yaml` and `setup.sh` pin the image to the stable `0.6` tag, so a
-node follows the 0.6.x releases instead of every push to `main`.
+`compose.yaml`, `compose.desktop.yaml` and `setup.sh` pin the image to the stable `0.7` tag, so a
+node follows the 0.7.x releases instead of every push to `main`.
 
 ```sh
 cd /opt/craftpilot-agent
 sudo docker compose pull && sudo docker compose up -d
 ```
 
-An existing install keeps its compose file, so change `:main` to `:0.6` there once
+An existing install keeps its compose file, so change `:main` to `:0.7` there once
 (`/opt/craftpilot-agent/compose.yaml`, or the panel's install directory on Windows) before pulling.
 
 Re-running `sudo ./setup.sh` does the same. On Windows the panel's **Uppdatera** button
-pulls the new image and restarts the container. To move to a new minor release, change `:0.6` to the
+pulls the new image and restarts the container. To move to a new minor release, change `:0.7` to the
 new tag in the compose file (and in `setup.sh` on Linux) and repeat.
 
 `.github/workflows/publish-image.yml` builds the Docker image on every pull request and
