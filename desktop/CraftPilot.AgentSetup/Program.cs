@@ -100,6 +100,10 @@ app.MapPost("/api/remove", async (AgentSetupService service, CancellationToken c
 app.MapPost("/api/servers/prune", async (AgentSetupService service, CancellationToken ct) =>
     Results.Ok(await service.PruneServersAsync(ct)));
 
+// Läget för en pågående nedladdning, så baren kan visa procent.
+app.MapGet("/api/panel-update/progress", (PanelUpdater updater) =>
+    Results.Ok(updater.Progress));
+
 // Hämtar panelens nästa exe från GitHub, kontrollerar SHA256, byter ut
 // filen och startar om panelen. Den här processen stängs strax efter svaret.
 app.MapPost("/api/panel-update", async (

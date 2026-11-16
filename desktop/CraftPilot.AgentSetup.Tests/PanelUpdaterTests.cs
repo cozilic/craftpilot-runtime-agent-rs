@@ -97,4 +97,31 @@ public sealed class PanelUpdaterTests
             "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef  annan-fil.exe\n",
             "CraftPilot.AgentSetup.exe"));
     }
+
+    [Fact]
+    public void Progress_starts_idle()
+    {
+        var progress = new PanelUpdater().Progress;
+
+        Assert.False(progress.Active);
+        Assert.Equal(0, progress.Received);
+        Assert.Equal(-1, progress.Total);
+        Assert.Null(progress.Percent);
+    }
+
+    [Fact]
+    public void Progress_percent_needs_a_known_total()
+    {
+        Assert.Null(new PanelDownloadProgress(true, 10, -1).Percent);
+        Assert.Null(new PanelDownloadProgress(true, 10, 0).Percent);
+    }
+
+    [Fact]
+    public void Progress_percent_follows_the_download_and_stops_at_100()
+    {
+        Assert.Equal(0, new PanelDownloadProgress(true, 0, 83_000_000).Percent);
+        Assert.Equal(40, new PanelDownloadProgress(true, 40, 100).Percent);
+        Assert.Equal(100, new PanelDownloadProgress(true, 83_000_000, 83_000_000).Percent);
+        Assert.Equal(100, new PanelDownloadProgress(true, 130, 100).Percent);
+    }
 }

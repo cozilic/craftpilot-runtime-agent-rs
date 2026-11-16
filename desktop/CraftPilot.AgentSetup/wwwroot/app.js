@@ -504,10 +504,17 @@ function startProgress(label) {
   $('progress-label').textContent = label;
   $('progress-elapsed').textContent = '0 s';
   track.setAttribute('aria-valuetext', label);
+  track.removeAttribute('aria-valuenow');
+  track.style.removeProperty('--progress');
+  bar.dataset.mode = 'indeterminate';
   bar.hidden = false;
 
   window.clearInterval(progressTimer);
   progressTimer = window.setInterval(() => {
+    if (bar.dataset.mode === 'determinate') {
+      return;
+    }
+
     const seconds = Math.max(0, Math.round((Date.now() - progressStartedAt) / 1000));
     $('progress-elapsed').textContent = `${seconds} s`;
     track.setAttribute('aria-valuetext', `${label}, ${seconds} sekunder`);
@@ -520,6 +527,38 @@ function stopProgress() {
   const bar = $('progress');
   if (bar) {
     bar.hidden = true;
+    bar.dataset.mode = 'indeterminate';
+  }
+}
+
+// Panelens nedladdning vet hur många byte som kommit, så baren kan fyllas i
+// procent. Docker-åtgärderna har ingen delprogress och är kvar obestämda.
+function setProgressDeterminate(percent) {
+  const bar = $('progress');
+  const track = $('progress-track');
+  if (!bar || !track) {
+    return;
+  }
+
+  const value = Math.max(0, Math.min(100, Math.round(percent)));
+  const label = $('progress-label').textContent;
+  bar.dataset.mode = 'determinate';
+  track.style.setProperty('--progress', `${value}%`);
+  track.setAttribute('aria-valuemin', '0');
+  track.setAttribute('aria-valuemax', '100');
+  track.setAttribute('aria-valuenow', String(value));
+  track.setAttribute('aria-valuetext', `${label}, ${value} procent`);
+  $('progress-elapsed').textContent = `${value} %`;
+}
+
+async function refreshDownloadProgress() {
+  try {
+    const progress = await api('/api/panel-update/progress');
+    if (progress.active && progress.percent != null) {
+      setProgressDeterminate(progress.percent);
+    }
+  } catch {
+    // Panelen kan redan ha stängt servern; baren städas i runPanelUpdate.
   }
 }
 
@@ -594,6 +633,7 @@ async function runPanelUpdate() {
   startProgress('Laddar ner ny panelversion');
   $('update-text').textContent = 'Laddar ner och kontrollerar den nya versionen…';
   $('update-now').hidden = true;
+  const progressPoll = window.setInterval(refreshDownloadProgress, 400);
 
   try {
     const result = await api('/api/panel-update', { method: 'POST', body: '{}' });
@@ -614,6 +654,7 @@ async function runPanelUpdate() {
     $('update-text').textContent = `Uppdateringen misslyckades: ${error.message}`;
     $('update-now').hidden = false;
   } finally {
+    window.clearInterval(progressPoll);
     stopProgress();
     if (!state.updating) {
       setBusy(false);

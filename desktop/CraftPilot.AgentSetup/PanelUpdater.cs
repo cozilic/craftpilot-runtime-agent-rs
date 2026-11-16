@@ -24,11 +24,21 @@ public sealed class PanelUpdater
 
     private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromMinutes(10) };
 
+    private long _received;
+    private long _total = -1;
+    private int _downloading;
+
     public sealed record ReleaseFiles(
         string Tag,
         string InstallerUrl,
         string ChecksumsUrl,
         string ReleaseUrl);
+
+    /// <summary>Läget för en pågående nedladdning av panelens exe.</summary>
+    public PanelDownloadProgress Progress => new(
+        Volatile.Read(ref _downloading) == 1,
+        Interlocked.Read(ref _received),
+        Interlocked.Read(ref _total));
 
     public async Task<PanelUpdateResult> UpdateAsync(CancellationToken ct = default)
     {
@@ -325,27 +335,44 @@ public sealed class PanelUpdater
         return await response.Content.ReadAsStringAsync(ct);
     }
 
-    /// <summary>Laddar ner filen och räknar ut SHA256 medan den skrivs.</summary>
-    private static async Task<string> DownloadAsync(string url, string destination, CancellationToken ct)
+    /// <summary>
+    /// Laddar ner filen, räknar ut SHA256 medan den skrivs och rapporterar hur
+    /// långt den kommit så panelen kan visa procent.
+    /// </summary>
+    private async Task<string> DownloadAsync(string url, string destination, CancellationToken ct)
     {
         using var request = CreateRequest(url);
         using var response = await Http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
         response.EnsureSuccessStatusCode();
 
-        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        await using (var source = await response.Content.ReadAsStreamAsync(ct))
-        await using (var target = File.Create(destination))
-        {
-            var buffer = new byte[81920];
-            int read;
-            while ((read = await source.ReadAsync(buffer, ct)) > 0)
-            {
-                hash.AppendData(buffer, 0, read);
-                await target.WriteAsync(buffer.AsMemory(0, read), ct);
-            }
-        }
+        Interlocked.Exchange(ref _received, 0);
+        Interlocked.Exchange(ref _total, response.Content.Headers.ContentLength ?? -1);
+        Volatile.Write(ref _downloading, 1);
 
-        return Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant();
+        try
+        {
+            using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+            await using (var source = await response.Content.ReadAsStreamAsync(ct))
+            await using (var target = File.Create(destination))
+            {
+                var buffer = new byte[81920];
+                long received = 0;
+                int read;
+                while ((read = await source.ReadAsync(buffer, ct)) > 0)
+                {
+                    hash.AppendData(buffer, 0, read);
+                    await target.WriteAsync(buffer.AsMemory(0, read), ct);
+                    received += read;
+                    Interlocked.Exchange(ref _received, received);
+                }
+            }
+
+            return Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant();
+        }
+        finally
+        {
+            Volatile.Write(ref _downloading, 0);
+        }
     }
 
     private static bool LooksLikeWindowsExe(string path)
