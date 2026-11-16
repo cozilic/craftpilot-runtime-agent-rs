@@ -50,3 +50,11 @@ public sealed class UpdateCheckResponse
     public string? Error { get; init; }
     public DateTimeOffset CheckedAt { get; init; }
 }
+
+/// Svar från panelens självuppdatering: nedladdning, kontrollsumma och
+/// utbyte av panelens egen exe.
+public sealed record PanelUpdateResult(
+    bool Ok,
+    string? Error,
+    string? Version,
+    string? ReleaseUrl);

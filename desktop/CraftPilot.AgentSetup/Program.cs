@@ -15,9 +15,24 @@ builder.WebHost.ConfigureKestrel(options => options.Listen(IPAddress.Loopback, 0
 builder.Services.AddSingleton<SetupSession>();
 builder.Services.AddSingleton<AgentSetupService>();
 builder.Services.AddSingleton<UpdateChecker>();
+builder.Services.AddSingleton<PanelUpdater>();
 builder.Logging.ClearProviders();
 
 var app = builder.Build();
+
+// En självuppdatering lämnar förra panelversionen som .old bredvid exen.
+try
+{
+    if (Environment.ProcessPath is { } processPath && File.Exists(processPath + ".old"))
+    {
+        File.Delete(processPath + ".old");
+    }
+}
+catch
+{
+    // Filen kan vara låst av en pågående uppdatering; den städas nästa gång.
+}
+
 var session = app.Services.GetRequiredService<SetupSession>();
 var assembly = typeof(SetupSession).Assembly;
 
@@ -84,6 +99,36 @@ app.MapPost("/api/remove", async (AgentSetupService service, CancellationToken c
 // Avbryter en pågående docker-åtgärd (installera, uppdatera, stoppa, ta bort).
 app.MapPost("/api/servers/prune", async (AgentSetupService service, CancellationToken ct) =>
     Results.Ok(await service.PruneServersAsync(ct)));
+
+// Hämtar panelens nästa exe från GitHub, kontrollerar SHA256, byter ut
+// filen och startar om panelen. Den här processen stängs strax efter svaret.
+app.MapPost("/api/panel-update", async (
+    PanelUpdater updater,
+    SetupSession setupSession,
+    IHostApplicationLifetime lifetime,
+    CancellationToken ct) =>
+{
+    if (setupSession.Busy)
+    {
+        return Results.Ok(new PanelUpdateResult(
+            false,
+            "Vänta tills den pågående åtgärden är klar.",
+            null,
+            null));
+    }
+
+    var result = await updater.UpdateAsync(ct);
+    if (result.Ok)
+    {
+        _ = Task.Run(async () =>
+        {
+            await Task.Delay(700);
+            lifetime.StopApplication();
+        });
+    }
+
+    return Results.Ok(result);
+});
 
 app.MapPost("/api/cancel", (SetupSession session) =>
     Results.Ok(new { ok = session.Cancel() }));
