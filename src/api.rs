@@ -184,9 +184,15 @@ impl MasterClient {
         .await
     }
 
-    pub async fn heartbeat(&self, node_id: &str, sequence: i64) -> Result<HeartbeatResponse> {
+    pub async fn heartbeat(
+        &self,
+        node_id: &str,
+        sequence: i64,
+        uptime_seconds: u64,
+    ) -> Result<HeartbeatResponse> {
         let body = serde_json::json!({
             "sequence": sequence,
+            "uptime_seconds": uptime_seconds,
             // Versionen följer med varje poll, så en uppgraderad nod syns i
             // admin utan omregistrering.
             "agent_version": AGENT_VERSION,
@@ -202,9 +208,15 @@ impl MasterClient {
 
     /// Claim räknas också som heartbeat på mastern: samma sekvens räcker,
     /// men varje anrop måste ha ett NYTT nummer.
-    pub async fn claim(&self, node_id: &str, sequence: i64) -> Result<ClaimResponse> {
+    pub async fn claim(
+        &self,
+        node_id: &str,
+        sequence: i64,
+        uptime_seconds: u64,
+    ) -> Result<ClaimResponse> {
         let body = serde_json::json!({
             "sequence": sequence,
+            "uptime_seconds": uptime_seconds,
             "agent_version": AGENT_VERSION,
         });
         self.request(

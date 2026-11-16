@@ -39,6 +39,7 @@ pub struct Agent {
     last_report: Option<Instant>,
     assigned_servers: BTreeSet<String>,
     last_file_tree_progress: Option<String>,
+    started_at: Instant,
 }
 
 impl Agent {
@@ -84,6 +85,7 @@ impl Agent {
             last_report: None,
             assigned_servers: BTreeSet::new(),
             last_file_tree_progress: None,
+            started_at: Instant::now(),
         })
     }
 
@@ -135,7 +137,10 @@ impl Agent {
             .clone()
             .ok_or(AgentError::Unauthorized)?;
         let sequence = self.store.next_sequence()?;
-        let heartbeat = self.api.heartbeat(&node_id, sequence).await?;
+        let heartbeat = self
+            .api
+            .heartbeat(&node_id, sequence, self.uptime_seconds())
+            .await?;
         info!(
             agent_version = %heartbeat.agent_version,
             heartbeat_interval_seconds = heartbeat.heartbeat_interval_seconds,
@@ -327,6 +332,12 @@ impl Agent {
         }
     }
 
+    /// Agentprocessens drifttid. Skickas med heartbeat/claim så ägarvyn kan
+    /// visa hur länge noden varit igång sedan senaste omstart.
+    fn uptime_seconds(&self) -> u64 {
+        self.started_at.elapsed().as_secs()
+    }
+
     async fn tick(&mut self) -> Result<()> {
         let node_id = self
             .store
@@ -335,7 +346,10 @@ impl Agent {
             .clone()
             .ok_or(AgentError::Unauthorized)?;
         let sequence = self.store.next_sequence()?;
-        let claim = self.api.claim(&node_id, sequence).await?;
+        let claim = self
+            .api
+            .claim(&node_id, sequence, self.uptime_seconds())
+            .await?;
 
         // Telemetrin hör inte till kommandokön: den måste skickas även när
         // claim är tomt, annars stannar panelens status så snart inget körs.
