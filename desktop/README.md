@@ -33,7 +33,9 @@ uppmaning att starta Docker Desktop. Inga compose-filer skrivs förrän Docker �
 1. Panelen ansluter alltid till mastern `https://craftpilot.se`; adressen kan inte ändras.
 2. Välj mappen för serverdata. Standard är `%USERPROFILE%\CraftPilot\servers`.
 3. Klicka **Installera / starta**. Panelen skapar nätverket, hämtar agentimagen och startar
-   containern.
+   containern. Finns redan en container med namnet `craftpilot-runtime-agent-rs` (från en
+   tidigare installation eller `runtime-agent/start-rs-agent.ps1`) tar panelen bort den först —
+   compose vägrar annars återanvända namnet och installationen fastnar.
 4. När claim-koden visas: kopiera den och öppna **Min nod** via panelen. Klistra in koden där.
 5. Statuskorten ska bli gröna för Docker, master och agent. Efter slutförd anslutning visar
    panelen **Redan ansluten** i stället för en ny kod.
@@ -49,9 +51,16 @@ Bocken **Starta med Windows** lägger en post under
 inloggning. Då visas bara tray-ikonen; panelens fönster skapas först när du öppnar det. Samma
 inställning finns i tray-menyn.
 
+**Avbryt** avbryter en pågående åtgärd (installation, uppdatering, stopp eller borttagning).
 **Uppdatera** hämtar den senaste `main`-imagen och startar om agenten. **Stoppa** stoppar
-containern men behåller både serverdata och agentens state. Använd `docker compose ... down -v`
-manuellt om du vill radera anslutningen och tvinga en ny claim.
+containern men behåller både serverdata och agentens state. **Ta bort** tar bort containern och
+panelens installationsfiler (`.env.desktop` och `compose.desktop.yaml`); serverdata, agentens
+state-volym och nodens credential ligger kvar, så nästa installation återansluter samma nod.
+Använd `docker compose ... down -v` manuellt om du vill radera anslutningen och tvinga en ny
+claim.
+
+Rust-agenten kör servrarna som Docker-containrar. Docker Desktop måste därför vara igång; det
+finns ingen Docker-fri start i den här panelen.
 
 ## Uppdatera panelen
 

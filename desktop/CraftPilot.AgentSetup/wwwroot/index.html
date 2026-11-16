@@ -151,12 +151,15 @@
 
         <p class="hint">
           Agenten ansluter alltid till <code>https://craftpilot.se</code>. Serverdata är den mapp där agenten ska skapa och köra dina servrar.
+          Rust-agenten kör servrarna som Docker-containrar, så Docker Desktop måste vara igång – det finns ingen Docker-fri start.
         </p>
 
         <div class="actions">
           <button class="button button-primary" id="install-panel" type="button">Installera / starta</button>
           <button class="button button-quiet" id="update" type="button">Uppdatera</button>
           <button class="button button-quiet button-danger" id="stop" type="button">Stoppa</button>
+          <button class="button button-quiet" id="cancel" type="button" disabled>Avbryt</button>
+          <button class="button button-quiet button-danger" id="remove" type="button">Ta bort</button>
           <button class="button button-link" id="open-folder" type="button">Öppna installationsmapp</button>
         </div>
 

@@ -1,6 +1,6 @@
 const token = document.querySelector('meta[name="cp-token"]')?.content ?? '';
 const $ = (id) => document.getElementById(id);
-const state = { busy: false, loaded: false, dockerReady: false, installed: false };
+const state = { busy: false, loaded: false, dockerReady: false, installed: false, agentExists: false };
 
 async function api(path, options = {}) {
   const response = await fetch(path, {
@@ -137,6 +137,7 @@ function renderStatus(status) {
   const dockerState = status.dockerState || (status.dockerOk ? 'ready' : 'error');
   state.dockerReady = dockerState === 'ready';
   state.installed = Boolean(status.installed);
+  state.agentExists = Boolean(status.agentExists);
 
   if (state.dockerReady) {
     setCard(
@@ -212,6 +213,13 @@ function renderStatus(status) {
       'warn', 'Stoppad',
       'Agenten är stoppad',
       'Containern finns men körs inte just nu.'
+    );
+  } else if (status.agentExists) {
+    setCard(
+      'agent-card', 'agent-dot', 'agent-badge', 'agent-title', 'agent-detail',
+      'warn', 'Hittad',
+      'Agentcontainern finns redan',
+      'Panelen saknar installationsfilerna. Klicka på Installera / starta för att ta över den, eller Ta bort.'
     );
   } else {
     setCard(
@@ -311,9 +319,14 @@ function applyControls() {
   for (const id of ['install', 'install-panel']) {
     $(id).disabled = !canInstall;
   }
-  for (const id of ['update', 'stop']) {
-    $(id).disabled = !canManage;
-  }
+  $('update').disabled = !canManage;
+
+  // Stoppa och Ta bort gäller även en container som panelen inte installerat
+  // själv (t.ex. efter en tidigare installation eller start-rs-agent.ps1).
+  const canManageContainer = (state.installed || state.agentExists) && state.dockerReady && !state.busy;
+  $('stop').disabled = !canManageContainer;
+  $('remove').disabled = !canManageContainer;
+  $('cancel').disabled = !state.busy;
   $('refresh').disabled = state.busy;
   $('open-folder').disabled = state.busy;
   $('startup').disabled = state.busy;
@@ -411,6 +424,26 @@ $('stop').addEventListener('click', () => {
     return;
   }
   runOperation('/api/stop', null, 'Stoppar agenten');
+});
+
+$('cancel').addEventListener('click', async () => {
+  if (!state.busy) {
+    return;
+  }
+
+  try {
+    const result = await api('/api/cancel', { method: 'POST', body: '{}' });
+    appendLog(result.ok ? 'Avbryter den pågående åtgärden…' : 'Ingen pågående åtgärd att avbryta.');
+  } catch (error) {
+    appendLog(`Kunde inte avbryta: ${error.message}`);
+  }
+});
+
+$('remove').addEventListener('click', () => {
+  if (!window.confirm('Ta bort agenten från datorn? Containern tas bort och agenten kopplas bort från noden. Serverdata och agentens state ligger kvar.')) {
+    return;
+  }
+  runOperation('/api/remove', null, 'Tar bort agenten');
 });
 
 $('open-folder').addEventListener('click', async () => {
