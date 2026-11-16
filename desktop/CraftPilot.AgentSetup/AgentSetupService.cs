@@ -170,6 +170,11 @@ public sealed class AgentSetupService
     public Task<OperationResponse> RemoveAsync(CancellationToken ct = default) =>
         RunOperationAsync(RemoveCoreAsync, ct);
 
+    /// Tar bort agentens servercontainrar som inte körs. Serverfilerna ligger
+    /// kvar på disken, så nästa start skapar en ny container med samma data.
+    public Task<OperationResponse> PruneServersAsync(CancellationToken ct = default) =>
+        RunOperationAsync(PruneServersCoreAsync, ct);
+
     /// Kör en åtgärd med operation-lås, busy-flagga och Avbryt-stöd. Alla
     /// åtgärder går genom den här vägen, så panelen aldrig kan fastna i ett
     /// läge där en knapp är disabled utan motstycke.
@@ -305,6 +310,58 @@ public sealed class AgentSetupService
         }
 
         await Task.Delay(TimeSpan.FromSeconds(1.5), ct);
+        return new OperationResponse(true, output.ToString().Trim(), null, await GetStatusAsync(ct));
+    }
+
+    private async Task<OperationResponse> PruneServersCoreAsync(StringBuilder output, CancellationToken ct)
+    {
+        var docker = await CheckDockerAsync(ct);
+        if (docker.State != DockerStateClassifier.Ready)
+        {
+            return Fail(DockerGuidance(docker.State), output);
+        }
+
+        var list = await RunAsync(
+            "docker",
+            ["ps", "-a", "--filter", "label=craftpilot.managed=1", "--format", ServerContainers.Format],
+            TimeSpan.FromSeconds(10),
+            null,
+            ct);
+        if (list.ExitCode != 0)
+        {
+            return Fail("Kunde inte läsa serverlistan från Docker.", output);
+        }
+
+        // Bara stoppade containrar med agentens eget namn rörs. Körda servrar
+        // och containrar som något annat skapat lämnas i fred.
+        var stopped = ServerContainers.Stopped(ServerContainers.Parse(list.StdOut));
+        if (stopped.Count == 0)
+        {
+            output.AppendLine("Inga stoppade servercontainrar att rensa.");
+            return new OperationResponse(true, output.ToString().Trim(), null, await GetStatusAsync(ct));
+        }
+
+        var failed = 0;
+        foreach (var server in stopped)
+        {
+            var remove = await RunAsync("docker", ["rm", server.Name], TimeSpan.FromSeconds(30), null, ct);
+            if (remove.ExitCode == 0)
+            {
+                output.AppendLine($"Borttagen: {server.Name}");
+            }
+            else
+            {
+                failed++;
+                output.AppendLine($"Kunde inte ta bort {server.Name}: {FirstLine(remove.Combined)}");
+            }
+        }
+
+        if (failed > 0)
+        {
+            return Fail($"{failed} av {stopped.Count} stoppade containrar kunde inte tas bort.", output);
+        }
+
+        output.AppendLine($"Klart: {stopped.Count} stoppade containrar borttagna. Serverfilerna ligger kvar på disken.");
         return new OperationResponse(true, output.ToString().Trim(), null, await GetStatusAsync(ct));
     }
 

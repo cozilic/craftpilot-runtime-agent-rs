@@ -333,6 +333,7 @@ function applyControls() {
   $('open-folder').disabled = state.busy;
   $('startup').disabled = state.busy;
   $('load-logs').disabled = state.busy || !state.installed;
+  $('prune-servers').disabled = state.busy || !state.dockerReady;
 }
 
 const TAB_IDS = ['main', 'settings', 'log'];
@@ -465,6 +466,13 @@ function renderServers(status) {
   list.replaceChildren(...servers.map(serverRow));
   list.hidden = servers.length === 0;
   empty.hidden = servers.length > 0;
+
+  const stopped = servers.filter((server) => !server.running && server.state !== 'running').length;
+  const prune = $('prune-servers');
+  if (prune) {
+    prune.hidden = stopped === 0;
+    prune.textContent = stopped === 1 ? 'Rensa 1 stoppad' : `Rensa ${stopped} stoppade`;
+  }
   empty.textContent = status.dockerOk === false
     ? 'Serverlistan kan inte läsas förrän Docker Desktop är igång.'
     : 'Här listas de servrar som agenten kör på den här datorn. Skapa en server i panelen på craftpilot.se – så dyker den upp här med status.';
@@ -536,6 +544,17 @@ $('refresh').addEventListener('click', () => {
   checkVersion();
 });
 $('load-logs').addEventListener('click', loadLogs);
+
+// Städar bort servercontainrar som inte körs. Servernas filer ligger kvar på
+// disken, så en start i mastern skapar en ny container med samma data.
+$('prune-servers').addEventListener('click', () => {
+  const message = 'Ta bort de stoppade servercontainrarna? Servernas filer ligger kvar på disken.';
+  if (!window.confirm(message)) {
+    return;
+  }
+
+  runOperation('/api/servers/prune', {}, 'Rensar stoppade servercontainrar');
+});
 
 $('startup').addEventListener('change', async () => {
   const enabled = $('startup').checked;
