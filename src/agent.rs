@@ -508,6 +508,7 @@ impl Agent {
                 return self.file_command(command).await;
             }
             "file_download" => return self.download_command(command).await,
+            "install_artifact" => return self.install_command(command).await,
             "migration_prepare"
             | "migration_export"
             | "migration_import"
@@ -613,6 +614,57 @@ impl Agent {
             result_code,
             message,
             container_id,
+        }
+    }
+
+    /// Artefaktinstallation (docs/RUNTIME-NODE-ARTIFACT-INSTALL.md): mastern
+    /// har redan verifierat filen; agenten hämtar den med sin lease, verifierar
+    /// storlek + SHA-256 och placerar den atomiskt i serverroten.
+    ///
+    /// Resultatkoden säger vad som hände. Panelens "installerad" kommer från
+    /// nästa serverreport (`artifact_present`), aldrig från den här acken.
+    async fn install_command(&self, command: &Command) -> AckRequest {
+        let Some(node_id) = self.store.state().node_id.clone() else {
+            return failure(command, "the agent has no node id");
+        };
+        let server_id = match crate::docker::server_id(&command.payload) {
+            Ok(server_id) => server_id,
+            Err(err) => {
+                return AckRequest {
+                    lease_token: command.lease_token.clone(),
+                    success: false,
+                    result_code: "ARTIFACT_INVALID".to_string(),
+                    message: Some(ack_message(&err)),
+                    container_id: None,
+                }
+            }
+        };
+
+        // Skriv aldrig i en serverrot vars container kör: filen skulle bytas
+        // under drift och nästa start hade laddat en annan binär.
+        let running = match self.docker.is_running(&server_id).await {
+            Ok(running) => running,
+            Err(err) => return failure(command, &ack_message(&err)),
+        };
+
+        let outcome = self
+            .files
+            .install_artifact(
+                &command.payload,
+                &self.api,
+                &node_id,
+                &command.id,
+                &command.lease_token,
+                running,
+            )
+            .await;
+
+        AckRequest {
+            lease_token: command.lease_token.clone(),
+            success: outcome.result_code == "ARTIFACT_INSTALLED",
+            result_code: outcome.result_code.to_string(),
+            message: Some(outcome.message),
+            container_id: None,
         }
     }
 

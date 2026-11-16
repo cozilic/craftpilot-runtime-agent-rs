@@ -32,6 +32,95 @@ pub struct Files {
     max_upload_bytes: u64,
 }
 
+/// Resultatet av en artefaktinstallation. `result_code` är det mastern
+/// validerar mot kommandots payload innan filen räknas som skriven.
+pub struct ArtifactInstall {
+    pub result_code: &'static str,
+    pub message: String,
+}
+
+impl ArtifactInstall {
+    fn failed(code: &'static str, message: &str) -> Self {
+        Self {
+            result_code: code,
+            // Mastern tar emot högst 300 tecken i ack:ens message.
+            message: message.chars().take(300).collect(),
+        }
+    }
+}
+
+/// Validerade fält ur `install_artifact`-payloaden. Allt som kan avvisas
+/// avvisas innan något skrivs i serverroten.
+struct ArtifactRequest {
+    server_id: String,
+    filename: String,
+    bytes: u64,
+    sha256: String,
+    executable: bool,
+}
+
+impl ArtifactRequest {
+    fn from_payload(payload: &Value) -> Result<Self> {
+        let filename = payload
+            .get("filename")
+            .and_then(Value::as_str)
+            .filter(|value| is_safe_name(value))
+            .ok_or_else(|| invalid("the artifact filename is invalid"))?;
+        let bytes = payload
+            .get("bytes")
+            .and_then(Value::as_u64)
+            .filter(|value| *value > 0)
+            .ok_or_else(|| invalid("the artifact size is invalid"))?;
+        let sha256 = payload
+            .get("sha256")
+            .and_then(Value::as_str)
+            .filter(|value| is_sha256(value))
+            .ok_or_else(|| invalid("the artifact digest is invalid"))?;
+
+        Ok(Self {
+            server_id: server_id(payload)?,
+            filename: filename.to_string(),
+            bytes,
+            sha256: sha256.to_string(),
+            executable: payload
+                .get("executable")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+        })
+    }
+}
+
+/// Sista steget: storlek, digest, körbarhet och atomisk placering. Separerad
+/// så att både storleks- och digestkontrollen kan testas utan nätverk.
+fn place_artifact(
+    temporary: &Path,
+    target: &Path,
+    received: u64,
+    digest: &str,
+    request: &ArtifactRequest,
+) -> std::result::Result<(), (&'static str, String)> {
+    if received != request.bytes {
+        return Err((
+            "ARTIFACT_DIGEST_MISMATCH",
+            "the artifact size does not match the metadata".to_string(),
+        ));
+    }
+    if digest != request.sha256 {
+        return Err((
+            "ARTIFACT_DIGEST_MISMATCH",
+            "the artifact digest does not match the metadata".to_string(),
+        ));
+    }
+    set_mode(temporary, if request.executable { 0o755 } else { 0o644 })
+        .map_err(|err| ("RUNTIME_ERROR", err.to_string()))?;
+
+    // rename() ersätter en befintlig fil atomiskt: antingen ligger den nya
+    // artefakten på plats eller den gamla - aldrig en halvskriven blandning.
+    std::fs::rename(temporary, target).map_err(|err| ("RUNTIME_ERROR", err.to_string()))?;
+
+    Ok(())
+}
+
 impl Files {
     pub fn new(data_root: PathBuf, max_edit_bytes: u64, max_upload_bytes: u64) -> Self {
         Self {
@@ -448,6 +537,121 @@ impl Files {
             "bytes": expected_bytes,
             "sha256": expected_sha,
         }))
+    }
+
+    /// Installerar serverns artefakt i serverroten (pumpkin-binär eller den
+    /// jar startkommandot kör). Mastern har redan verifierat filen mot
+    /// källans manifest; agenten verifierar storlek och SHA-256 på nytt och
+    /// placerar den atomiskt - filen är hel eller så finns den inte.
+    pub async fn install_artifact(
+        &self,
+        payload: &Value,
+        api: &MasterClient,
+        node_id: &str,
+        command_id: &str,
+        lease_token: &str,
+        container_running: bool,
+    ) -> ArtifactInstall {
+        use tokio::io::AsyncWriteExt;
+
+        let request = match ArtifactRequest::from_payload(payload) {
+            Ok(request) => request,
+            Err(err) => return ArtifactInstall::failed("ARTIFACT_INVALID", &err.to_string()),
+        };
+
+        if request.bytes > self.max_upload_bytes {
+            return ArtifactInstall::failed(
+                "ARTIFACT_TOO_LARGE",
+                "the artifact is larger than the agent upload limit",
+            );
+        }
+        if container_running {
+            return ArtifactInstall::failed(
+                "ARTIFACT_TARGET_BUSY",
+                "a container for the server is running",
+            );
+        }
+
+        let root = match self.root_for(&request.server_id) {
+            Ok(root) => root,
+            Err(err) => return ArtifactInstall::failed("ARTIFACT_INVALID", &err.to_string()),
+        };
+        let target = root.join(&request.filename);
+        let temporary = root.join(format!(".cp-artifact-{}", unique_suffix()));
+
+        let mut response = match api.fetch_artifact(node_id, command_id, lease_token).await {
+            Ok(response) => response,
+            Err(err) => return ArtifactInstall::failed("RUNTIME_ERROR", &err.to_string()),
+        };
+
+        if response
+            .content_length()
+            .map(|length| length != request.bytes)
+            .unwrap_or(false)
+        {
+            return ArtifactInstall::failed(
+                "ARTIFACT_DIGEST_MISMATCH",
+                "the artifact size does not match the metadata",
+            );
+        }
+
+        let mut file = match tokio::fs::File::create(&temporary).await {
+            Ok(file) => file,
+            Err(err) => return ArtifactInstall::failed("RUNTIME_ERROR", &err.to_string()),
+        };
+        let mut hasher = Sha256::new();
+        let mut received: u64 = 0;
+
+        loop {
+            match response.chunk().await {
+                Ok(Some(chunk)) => {
+                    received += chunk.len() as u64;
+                    if received > request.bytes {
+                        drop(file);
+                        let _ = std::fs::remove_file(&temporary);
+                        return ArtifactInstall::failed(
+                            "ARTIFACT_DIGEST_MISMATCH",
+                            "the artifact exceeded its declared size",
+                        );
+                    }
+                    hasher.update(&chunk);
+                    if let Err(err) = file.write_all(&chunk).await {
+                        drop(file);
+                        let _ = std::fs::remove_file(&temporary);
+                        return ArtifactInstall::failed("RUNTIME_ERROR", &err.to_string());
+                    }
+                }
+                Ok(None) => break,
+                Err(err) => {
+                    drop(file);
+                    let _ = std::fs::remove_file(&temporary);
+                    return ArtifactInstall::failed("RUNTIME_ERROR", &err.to_string());
+                }
+            }
+        }
+
+        let flushed = async {
+            file.flush().await?;
+            file.sync_all().await
+        }
+        .await;
+        drop(file);
+        if let Err(err) = flushed {
+            let _ = std::fs::remove_file(&temporary);
+            return ArtifactInstall::failed("RUNTIME_ERROR", &err.to_string());
+        }
+
+        let digest = hex(&hasher.finalize());
+        let placed = place_artifact(&temporary, &target, received, &digest, &request);
+        if let Err((code, message)) = placed {
+            let _ = std::fs::remove_file(&temporary);
+            return ArtifactInstall::failed(code, &message);
+        }
+
+        ArtifactInstall {
+            result_code: "ARTIFACT_INSTALLED",
+            message: format!("{} {} {}", request.filename, request.bytes, request.sha256),
+        }
     }
 
     /// Roten är alltid en riktig katalog under data-roten — aldrig en
@@ -989,5 +1193,92 @@ mod tests {
             iso8601(UNIX_EPOCH + std::time::Duration::from_secs(1_793_079_200)),
             "2026-10-27T05:33:20Z"
         );
+    }
+
+    #[test]
+    fn artifact_payload_rejects_unsafe_names_sizes_and_digests() {
+        let base = json!({
+            "server_id": server_id(),
+            "filename": "pumpkin",
+            "bytes": 4096,
+            "sha256": "a".repeat(64),
+            "executable": true,
+        });
+        let request = ArtifactRequest::from_payload(&base).unwrap();
+        assert_eq!(request.filename, "pumpkin");
+        assert_eq!(request.bytes, 4096);
+        assert!(request.executable);
+
+        for bad in ["../pumpkin", "pumpkin/../x", "", ".", "..", "/etc/passwd"] {
+            let mut payload = base.clone();
+            payload["filename"] = json!(bad);
+            assert!(
+                ArtifactRequest::from_payload(&payload).is_err(),
+                "accepted unsafe name {bad}"
+            );
+        }
+
+        let mut payload = base.clone();
+        payload["sha256"] = json!("abc");
+        assert!(ArtifactRequest::from_payload(&payload).is_err());
+
+        let mut payload = base.clone();
+        payload["bytes"] = json!(0);
+        assert!(ArtifactRequest::from_payload(&payload).is_err());
+
+        let mut payload = base;
+        payload["server_id"] = json!("../escape");
+        assert!(ArtifactRequest::from_payload(&payload).is_err());
+    }
+
+    #[test]
+    fn artifact_placement_verifies_digest_and_mode_atomically() {
+        let (dir, _files) = sandbox();
+        let root = server_root(&dir);
+        let target = root.join("pumpkin");
+        let temporary = root.join(".cp-artifact-test");
+        let body = b"pumpkin-binary".to_vec();
+        std::fs::write(&temporary, &body).unwrap();
+
+        let request = ArtifactRequest {
+            server_id: server_id().to_string(),
+            filename: "pumpkin".to_string(),
+            bytes: body.len() as u64,
+            sha256: hex(&Sha256::digest(&body)),
+            executable: true,
+        };
+        place_artifact(
+            &temporary,
+            &target,
+            body.len() as u64,
+            &request.sha256,
+            &request,
+        )
+        .unwrap();
+        assert_eq!(std::fs::read(&target).unwrap(), body);
+        assert!(!temporary.exists());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::metadata(&target).unwrap().permissions().mode() & 0o777,
+                0o755
+            );
+        }
+
+        // Fel digest: den befintliga artefakten lämnas orörd.
+        std::fs::write(&target, b"keep-me").unwrap();
+        std::fs::write(&temporary, &body).unwrap();
+        let wrong = "0".repeat(64);
+        let error =
+            place_artifact(&temporary, &target, body.len() as u64, &wrong, &request).unwrap_err();
+        assert_eq!(error.0, "ARTIFACT_DIGEST_MISMATCH");
+        assert_eq!(std::fs::read(&target).unwrap(), b"keep-me".to_vec());
+
+        // Fel storlek avvisas innan digesten ens jamfors.
+        let error = place_artifact(&temporary, &target, 1, &request.sha256, &request).unwrap_err();
+        assert_eq!(error.0, "ARTIFACT_DIGEST_MISMATCH");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
