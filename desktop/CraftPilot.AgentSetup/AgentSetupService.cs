@@ -135,6 +135,21 @@ public sealed class AgentSetupService
                     enrollmentCompleted: completed,
                     claimCode: completed ? null : ClaimCodeParser.Extract(logs));
             }
+
+            // Agentens servercontainrar bär labeln craftpilot.managed. Panelen
+            // visar dem i översikten så det syns att noden faktiskt hostar
+            // servrar, utan att fråga mastern.
+            var servers = await RunAsync(
+                "docker",
+                ["ps", "-a", "--filter", "label=craftpilot.managed=1", "--format", ServerContainers.Format],
+                TimeSpan.FromSeconds(5),
+                null,
+                ct);
+
+            if (servers.ExitCode == 0)
+            {
+                status = CopyStatus(status, servers: ServerContainers.Parse(servers.StdOut));
+            }
         }
 
         return status;
@@ -692,7 +707,8 @@ public sealed class AgentSetupService
         string? agentImage = null,
         string? agentError = null,
         bool? enrollmentCompleted = null,
-        string? claimCode = null) =>
+        string? claimCode = null,
+        IReadOnlyList<ServerContainer>? servers = null) =>
         new()
         {
             DockerOk = dockerOk ?? source.DockerOk,
@@ -718,6 +734,7 @@ public sealed class AgentSetupService
             InstallDir = source.InstallDir,
             StartupEnabled = source.StartupEnabled,
             Busy = source.Busy,
+            Servers = servers ?? source.Servers,
         };
 
     private sealed record DockerCheck(string State, string? Version, string? Error, bool DesktopInstalled);
