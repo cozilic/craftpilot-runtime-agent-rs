@@ -91,9 +91,38 @@ impl Agent {
 
     pub async fn run(mut self) -> Result<()> {
         self.file_tree.start();
-        self.ensure_credentialed().await?;
-        self.handshake().await?;
+        self.start_session().await?;
         self.main_loop().await
+    }
+
+    /// Startar en session: säkerställ credential och en accepterad handshake.
+    ///
+    /// En sparad credential som mastern inte längre känner igen (noden är
+    /// borttagen eller återskapad i panelen) får inte döda processen: då
+    /// startar containern om i en evig loop med samma döda credential. Den
+    /// släpps i stället och en ny enrollment fil:as, så agenten skriver ut en
+    /// färsk claim-kod i loggen och väntar på att noden kopplas igen.
+    async fn start_session(&mut self) -> Result<()> {
+        loop {
+            self.ensure_credentialed().await?;
+            match self.handshake().await {
+                Ok(()) => return Ok(()),
+                Err(err) if needs_new_credential(&err) => {
+                    warn!(
+                        "the master rejected the saved node credential — filing a replacement enrollment request"
+                    );
+                    self.forget_credential()?;
+                    // En registreringstoken som mastern nekar ska inte
+                    // försökas igen i en tight loop: nästa varv går via
+                    // själv-enrollment, som väntar på en ny claim.
+                    if self.cfg.registration_token.is_some() {
+                        self.cfg.registration_token = None;
+                    }
+                    sleep(Duration::from_secs(5)).await;
+                }
+                Err(err) => return Err(err),
+            }
+        }
     }
 
     /// Sparad credential vinner; annars engångstoken; annars själv-enrollment.
@@ -325,7 +354,7 @@ impl Agent {
                 }
                 _ = sleep(poll) => {
                     if let Err(err) = self.tick().await {
-                        if matches!(err, AgentError::Unauthorized) {
+                        if needs_new_credential(&err) {
                             warn!("the master rejected the credential — filing a replacement enrollment request");
                             self.forget_credential()?;
                             if let Err(enroll_err) = self.self_enroll().await {
@@ -930,6 +959,13 @@ impl Agent {
     }
 }
 
+/// Bara en nekad credential ska leda till en ny enrollment. Nätverksfel,
+/// konflikter och masterns övriga fel får aldrig kasta bort en credential som
+/// fortfarande fungerar.
+fn needs_new_credential(err: &AgentError) -> bool {
+    matches!(err, AgentError::Unauthorized)
+}
+
 /// Mastern tillåter högst 300 tecken i ack:ens `message`; ett längre
 /// Docker-fel ska trunkeras, inte göra acken ogiltig.
 fn ack_message(error: &AgentError) -> String {
@@ -973,7 +1009,23 @@ fn sha256_hex(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::sha256_hex;
+    use super::{needs_new_credential, sha256_hex};
+    use crate::error::AgentError;
+
+    /// En nod som tagits bort i panelen svarar 401 på nästa heartbeat. Det ska
+    /// leda till en ny enrollment — inte till att agenten dör med den sparade
+    /// credentialen kvar på disk och startar om i samma 401-loop.
+    #[test]
+    fn only_a_rejected_credential_requires_a_new_enrollment() {
+        assert!(needs_new_credential(&AgentError::Unauthorized));
+        assert!(!needs_new_credential(&AgentError::Conflict(
+            "replayed".to_string()
+        )));
+        assert!(!needs_new_credential(&AgentError::Rejected {
+            status: 500,
+            body: "boom".to_string()
+        }));
+    }
 
     #[test]
     fn console_ack_digest_matches_the_master_contract() {
