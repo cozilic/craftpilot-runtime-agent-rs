@@ -92,6 +92,9 @@ cd /opt/craftpilot-agent
 sudo docker compose pull && sudo docker compose up -d
 ```
 
+En befintlig installation behåller sin compose-fil – `setup.sh` skriver inte över den – så byt
+`:main` mot `:0.6` där en gång innan du hämtar imagen.
+
 Att köra `sudo ./setup.sh` igen gör samma sak.
 
 **Windows:** klicka **Uppdatera** i panelen – den hämtar den nya imagen och startar om agenten.

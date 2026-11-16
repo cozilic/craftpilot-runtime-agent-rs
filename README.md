@@ -175,6 +175,9 @@ cd /opt/craftpilot-agent
 sudo docker compose pull && sudo docker compose up -d
 ```
 
+An existing install keeps its compose file, so change `:main` to `:0.6` there once
+(`/opt/craftpilot-agent/compose.yaml`, or the panel's install directory on Windows) before pulling.
+
 Re-running `sudo ./setup.sh` does the same. On Windows the panel's **Uppdatera** button
 pulls the new image and restarts the container. To move to a new minor release, change `:0.6` to the
 new tag in the compose file (and in `setup.sh` on Linux) and repeat.
