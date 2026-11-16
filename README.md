@@ -14,9 +14,9 @@ the Python agent — no master changes are required to run it side by side.
 > följ statusen för Docker, master och agent.
 
 > **Status: phase 7.** Enrollment, heartbeat, command claiming, acknowledgement, START, STOP over
-> RCON, the one-time initial SNAPSHOT, console commands, the file manager, encrypted runtime-node
-> migrations and server telemetry work, file downloads stream to the master, and the remote file
-> tree is indexed and synced in bounded batches.
+> RCON, CANCEL_START, DELETE_SERVER, the one-time initial SNAPSHOT, console commands, the file
+> manager, encrypted runtime-node migrations and server telemetry work, file downloads stream to
+> the master, and the remote file tree is indexed and synced in bounded batches.
 
 ## Implemented
 
@@ -45,6 +45,15 @@ the Python agent — no master changes are required to run it side by side.
   Servers without RCON (Pumpkin, a missing properties file, a rejected password or a timeout) fall
   back to `docker stop --time <grace>` (SIGTERM) and `force` sends SIGKILL immediately, answering
   `STOPPED` / `ALREADY_STOPPED`; a container that loses its labels is never touched.
+- **CANCEL_START** (`cancel_start`): aborts a start that hangs in `STARTING`. The master sends no
+  `force` for this command, so the agent always SIGKILLs the container and never tries RCON — a
+  start that has hung cannot answer a graceful stop — and answers `START_CANCELLED`, or
+  `ALREADY_STOPPED` when the container is already gone or stopped. The master moves the server to
+  `CANCELLED` only after that ack.
+- **DELETE_SERVER** (`delete_server`): removes the container (`docker rm --force`, only after the
+  ownership label check; a missing container is a no-op) and then `<data root>/<server uuid>` and
+  the stored RCON password, answering `SERVER_DELETED`. A symlinked or escaping data directory is
+  refused and a missing one is a successful no-op, so a re-delivered command never fails.
 - **TELEMETRY** (`servers` + `servers/report`): every 30 s, and immediately after a start/stop,
   the agent reports its assigned servers: status from `docker inspect` (missing → `OFFLINE`,
   running → `ONLINE`, exited 0 → `OFFLINE`, non-zero → `CRASHED`), CPU/memory from

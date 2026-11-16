@@ -241,6 +241,29 @@ impl Docker {
         })
     }
 
+    /// Avbryter en start som hängt sig: SIGKILL direkt och aldrig RCON — en
+    /// server som fastnat i STARTING svarar inte på `stop`. Mastern går till
+    /// CANCELLED först när acken säger START_CANCELLED eller ALREADY_STOPPED.
+    pub async fn cancel_start(&self, payload: &Value) -> Result<StopOutcome> {
+        self.stop(&force_stop_payload(payload), None).await
+    }
+
+    /// Tar bort serverns container. En saknad container är ett lyckat resultat
+    /// (kommandot är idempotent), men en container som inte är vår vägras innan
+    /// den rörs.
+    pub async fn remove_container(&self, payload: &Value) -> Result<()> {
+        let server_id = server_id(payload)?;
+        let name = container_name(&server_id);
+        if self.inspect(&name, "{{.Id}}").await?.is_none() {
+            info!(server_id = %server_id, "server_container_remove_noop reason=container_missing");
+            return Ok(());
+        }
+        self.verify_managed(&server_id, &name).await?;
+        self.run(&["rm", "--force", &name], 60).await?;
+        info!(server_id = %server_id, "server_container_removed");
+        Ok(())
+    }
+
     /// Väntar på att containern lämnar `running`. RCON-stop är asynkront:
     /// spelet svarar innan det har hunnit spara klart och avsluta.
     async fn wait_until_stopped(&self, name: &str, limit: Duration) -> Result<bool> {
@@ -701,6 +724,16 @@ fn container_name(server_id: &str) -> String {
     format!("{CONTAINER_PREFIX}{compact}")
 }
 
+/// `cancel_start` stoppar hårt oavsett vad payloaden säger: mastern skickar
+/// `force: false` för alla kommandon utom STOP.
+fn force_stop_payload(payload: &Value) -> Value {
+    let mut forced = payload.clone();
+    if let Value::Object(map) = &mut forced {
+        map.insert("force".to_string(), Value::Bool(true));
+    }
+    forced
+}
+
 pub fn server_id(payload: &Value) -> Result<String> {
     let value = payload
         .get("server_id")
@@ -945,6 +978,17 @@ mod tests {
             container_name("134EB9B3-314F-4454-B53E-24097E0F1A07"),
             "craftpilot-134eb9b3"
         );
+    }
+
+    #[test]
+    fn cancel_start_forces_a_hard_stop() {
+        let original = payload();
+        let forced = force_stop_payload(&original);
+
+        assert_eq!(forced["force"].as_bool(), Some(true));
+        assert_eq!(forced["server_id"], original["server_id"]);
+        // Originalet lämnas orört: samma payload kan läses av flera steg.
+        assert_eq!(original["force"].as_bool(), Some(false));
     }
 
     #[test]

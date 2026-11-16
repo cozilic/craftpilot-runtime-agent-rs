@@ -1,4 +1,5 @@
 use std::collections::BTreeSet;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -415,7 +416,7 @@ impl Agent {
         let result = self.api.acknowledge(&node_id, &command.id, &ack).await;
         let urgent = matches!(
             command.command_type.as_str(),
-            "start" | "stop" | "migration_stop"
+            "start" | "stop" | "cancel_start" | "delete_server" | "migration_stop"
         );
         if urgent && !report_due {
             self.report_servers().await;
@@ -436,6 +437,53 @@ impl Agent {
     async fn stop_server(&self, payload: &Value) -> Result<crate::docker::StopOutcome> {
         let settings = self.rcon_settings(payload);
         self.docker.stop(payload, settings.as_ref()).await
+    }
+
+    /// `cancel_start` avbryter en hängande STARTING. Mastern sätter CANCELLED
+    /// först när acken bekräftar, så statusen speglar vad noden faktiskt gjorde.
+    async fn cancel_start(&self, payload: &Value) -> Result<crate::docker::StopOutcome> {
+        self.docker.cancel_start(payload).await
+    }
+
+    /// `delete_server` tar bort serverns runtime-spår på noden: containern
+    /// först och datakatalogen sist, så en process som fortfarande skriver inte
+    /// kan återskapa katalogen. Båda stegen är idempotenta — saknad container
+    /// och saknad katalog är ett lyckat resultat.
+    async fn delete_server(&mut self, payload: &Value) -> Result<()> {
+        let server_id = crate::docker::server_id(payload)?;
+        self.docker.remove_container(payload).await?;
+
+        match deletable_server_data(&self.cfg.server_data_root, &server_id)? {
+            Some(directory) => {
+                std::fs::remove_dir_all(&directory).map_err(|err| {
+                    AgentError::Runtime(format!("server data could not be removed: {err}"))
+                })?;
+                info!(server_id = %server_id, "server_data_deleted");
+            }
+            None => {
+                info!(server_id = %server_id, "server_data_delete_noop reason=directory_missing");
+            }
+        }
+
+        self.forget_rcon_password(&server_id);
+        Ok(())
+    }
+
+    /// Lösenordet hör till serverns datakatalog: när den är borta ska inget
+    /// gammalt lösenord ligga kvar i state-filen.
+    fn forget_rcon_password(&mut self, server_id: &str) {
+        if self
+            .store
+            .state_mut()
+            .rcon_passwords
+            .remove(server_id)
+            .is_none()
+        {
+            return;
+        }
+        if let Err(err) = self.store.save() {
+            warn!(server_id = %server_id, error = %err, "could not persist the removed rcon password");
+        }
     }
 
     /// Lösenordet skapas en gång per Java-server och sparas i state-filen
@@ -589,6 +637,40 @@ impl Agent {
                 ),
                 Err(err) => {
                     warn!(command_id = %command.id, error = %err, "stop failed");
+                    (
+                        false,
+                        "RUNTIME_ERROR".to_string(),
+                        Some(ack_message(&err)),
+                        None,
+                    )
+                }
+            },
+            "cancel_start" => match self.cancel_start(&command.payload).await {
+                Ok(outcome) => (
+                    true,
+                    if outcome.already_stopped {
+                        "ALREADY_STOPPED"
+                    } else {
+                        "START_CANCELLED"
+                    }
+                    .to_string(),
+                    None,
+                    None,
+                ),
+                Err(err) => {
+                    warn!(command_id = %command.id, error = %err, "cancel start failed");
+                    (
+                        false,
+                        "RUNTIME_ERROR".to_string(),
+                        Some(ack_message(&err)),
+                        None,
+                    )
+                }
+            },
+            "delete_server" => match self.delete_server(&command.payload).await {
+                Ok(()) => (true, "SERVER_DELETED".to_string(), None, None),
+                Err(err) => {
+                    warn!(command_id = %command.id, error = %err, "delete server failed");
                     (
                         false,
                         "RUNTIME_ERROR".to_string(),
@@ -1059,9 +1141,44 @@ fn sha256_hex(value: &str) -> String {
         .collect()
 }
 
+/// Serverns katalog, kontrollerad mot data-roten (AGENTS §6): en symlink
+/// eller en sökväg som lämnar roten vägras, och en katalog som redan är borta
+/// är ett lyckat resultat — därför `None` i stället för ett fel.
+fn deletable_server_data(root: &Path, server_id: &str) -> Result<Option<PathBuf>> {
+    let candidate = root.join(server_id);
+    match std::fs::symlink_metadata(&candidate) {
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => {
+            return Err(AgentError::Runtime(format!(
+                "server data could not be inspected: {err}"
+            )))
+        }
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            return Err(AgentError::Runtime(
+                "the server data directory is a symlink".into(),
+            ))
+        }
+        Ok(metadata) if !metadata.is_dir() => {
+            return Err(AgentError::Runtime(
+                "the server data path is not a directory".into(),
+            ))
+        }
+        Ok(_) => {}
+    }
+
+    let canonical_root = std::fs::canonicalize(root)?;
+    let resolved = std::fs::canonicalize(&candidate)?;
+    if resolved == canonical_root || !resolved.starts_with(&canonical_root) {
+        return Err(AgentError::Runtime(
+            "the server data directory escaped the configured root".into(),
+        ));
+    }
+    Ok(Some(resolved))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{needs_new_credential, sha256_hex};
+    use super::{deletable_server_data, needs_new_credential, sha256_hex};
     use crate::error::AgentError;
 
     /// En nod som tagits bort i panelen svarar 401 på nästa heartbeat. Det ska
@@ -1077,6 +1194,40 @@ mod tests {
             status: 500,
             body: "boom".to_string()
         }));
+    }
+
+    /// `delete_server` får bara röra serverns egen katalog: en saknad katalog
+    /// är ett lyckat resultat, en symlink avvisas, och inget utanför
+    /// data-roten kan nås eftersom server-id:t är en validerad UUID.
+    #[test]
+    fn deleting_server_data_stays_inside_the_data_root() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|elapsed| elapsed.as_nanos())
+            .unwrap_or_default();
+        let root = std::env::temp_dir().join(format!(
+            "craftpilot-cancel-delete-{}-{unique}",
+            std::process::id()
+        ));
+        let id = "096d46aa-4221-4e49-acd9-01624347f131";
+
+        assert_eq!(deletable_server_data(&root, id).unwrap(), None);
+
+        std::fs::create_dir_all(root.join(id)).unwrap();
+        std::fs::write(root.join(id).join("server.jar"), b"jar").unwrap();
+        let directory = deletable_server_data(&root, id).unwrap().unwrap();
+        std::fs::remove_dir_all(&directory).unwrap();
+        assert!(!root.join(id).exists());
+        assert_eq!(deletable_server_data(&root, id).unwrap(), None);
+
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(&root, root.join(id)).unwrap();
+            assert!(deletable_server_data(&root, id).is_err());
+            std::fs::remove_file(root.join(id)).unwrap();
+        }
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
