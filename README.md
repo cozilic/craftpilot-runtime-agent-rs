@@ -110,6 +110,7 @@ A download larger than `CRAFTPILOT_MAX_UPLOAD_BYTES` is refused before anything 
 | `CRAFTPILOT_NODE_ID` | – | Only to attach an existing node. |
 | `CRAFTPILOT_REGISTRATION_TOKEN` | – | One-time token for a re-enabled node. |
 | `CRAFTPILOT_POLL_SECONDS` | `5` | Command poll interval, 5–120. |
+| `CRAFTPILOT_HOST_ADDRESS` | auto-detected | Address the agent reports at enrollment (the panel pre-fills it in the claim form). Detected as the machine's LAN IP when the agent runs directly on the host; never auto-detected inside a container (the bridge IP is useless), so set it explicitly there — or for a public IP or a host with several interfaces. |
 | `CRAFTPILOT_DOCKER_NETWORK` | `craftpilot-servers` | Network the game containers join; a spec for another network is refused. |
 | `CRAFTPILOT_ALLOWED_IMAGES` | master Java images + `craftpilot-pumpkin:latest` | Exact image allowlist. |
 | `CRAFTPILOT_STOP_GRACE_SECONDS` | `30` | `docker stop` timeout before the daemon sends SIGKILL, 0–45. |

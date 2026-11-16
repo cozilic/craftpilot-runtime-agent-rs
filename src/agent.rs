@@ -197,7 +197,11 @@ impl Agent {
             None => {
                 let created = self
                     .api
-                    .create_enrollment(&self.cfg.hostname, &self.cfg.agent_version)
+                    .create_enrollment(
+                        &self.cfg.hostname,
+                        &self.cfg.agent_version,
+                        self.cfg.reported_address.as_deref(),
+                    )
                     .await?;
                 info!(
                     request_id = %created.request_id,
@@ -281,7 +285,11 @@ impl Agent {
 
                     let created = self
                         .api
-                        .create_enrollment(&self.cfg.hostname, &self.cfg.agent_version)
+                        .create_enrollment(
+                            &self.cfg.hostname,
+                            &self.cfg.agent_version,
+                            self.cfg.reported_address.as_deref(),
+                        )
                         .await?;
                     info!(request_id = %created.request_id, "filed a replacement enrollment request");
                     if let Some(code) = created.claim_code.clone() {
