@@ -79,6 +79,28 @@ sudo docker compose ps
 
 På Windows visar panelen Docker-, master- och agentstatus samt claim-koden.
 
+## Uppdatera agenten
+
+`compose.yaml`, `compose.desktop.yaml` och `setup.sh` pekar på den stabila taggen `0.6`, så noden
+följer 0.6.x-släppen i stället för varje push till `main`. Serverdata och state-volymen ligger kvar
+vid uppdatering.
+
+**Linux:**
+
+```sh
+cd /opt/craftpilot-agent
+sudo docker compose pull && sudo docker compose up -d
+```
+
+Att köra `sudo ./setup.sh` igen gör samma sak.
+
+**Windows:** klicka **Uppdatera** i panelen – den hämtar den nya imagen och startar om agenten.
+Panelen uppdateras separat genom att ladda ner `CraftPilot.AgentSetup.exe` från senaste release
+(bannern i panelen länkar dit).
+
+Ny minor-version (t.ex. 0.7): byt `:0.6` mot den nya taggen i `compose.yaml` respektive
+`compose.desktop.yaml` (och i `setup.sh`) och upprepa.
+
 ## Verifiera nedladdningar
 
 Varje release innehåller `SHA256SUMS`:

@@ -165,6 +165,20 @@ required directories and Docker network, writes `.env`, pulls the image and prin
 For Docker Desktop on macOS or Windows, use `compose.desktop.yaml`; see
 [GUIDE.sv.md](GUIDE.sv.md) for the full walkthrough.
 
+### Update a node
+
+`compose.yaml`, `compose.desktop.yaml` and `setup.sh` pin the image to the stable `0.6` tag, so a
+node follows the 0.6.x releases instead of every push to `main`.
+
+```sh
+cd /opt/craftpilot-agent
+sudo docker compose pull && sudo docker compose up -d
+```
+
+Re-running `sudo ./setup.sh` does the same. On Windows the panel's **Uppdatera** button
+pulls the new image and restarts the container. To move to a new minor release, change `:0.6` to the
+new tag in the compose file (and in `setup.sh` on Linux) and repeat.
+
 `.github/workflows/publish-image.yml` builds the Docker image on every pull request and
 smoke-tests it without pushing. Pushes to `main` publish `main` and `sha-<commit>` tags, and a
 stable semantic-version tag such as `v0.2.0` publishes `0.2.0`, `0.2`, `0`, `sha-<commit>` and
