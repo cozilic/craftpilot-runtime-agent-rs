@@ -82,7 +82,8 @@ impl Config {
                 "/var/lib/craftpilot-agent",
             )),
             server_data_root,
-            agent_version: env!("CARGO_PKG_VERSION").to_string(),
+            // Byggversionen (build.rs), inte Cargo-paketets platshållare.
+            agent_version: crate::build_info::AGENT_VERSION.to_string(),
             hostname: detect_hostname(),
             poll_seconds,
             docker_network,

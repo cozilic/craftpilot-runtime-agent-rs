@@ -5,6 +5,7 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 use url::Url;
 
+use crate::build_info::AGENT_VERSION;
 use crate::error::{AgentError, Result};
 use crate::model::{
     AckRequest, ClaimResponse, EnrollmentCreated, EnrollmentPoll, HeartbeatResponse,
@@ -170,7 +171,10 @@ impl MasterClient {
         node_id: &str,
         registration_token: &str,
     ) -> Result<RegisterResponse> {
-        let body = serde_json::json!({ "registration_token": registration_token });
+        let body = serde_json::json!({
+            "registration_token": registration_token,
+            "agent_version": AGENT_VERSION,
+        });
         self.request(
             Method::POST,
             &format!("api/runtime/nodes/{node_id}/register"),
@@ -181,7 +185,12 @@ impl MasterClient {
     }
 
     pub async fn heartbeat(&self, node_id: &str, sequence: i64) -> Result<HeartbeatResponse> {
-        let body = serde_json::json!({ "sequence": sequence });
+        let body = serde_json::json!({
+            "sequence": sequence,
+            // Versionen följer med varje poll, så en uppgraderad nod syns i
+            // admin utan omregistrering.
+            "agent_version": AGENT_VERSION,
+        });
         self.request(
             Method::POST,
             &format!("api/runtime/nodes/{node_id}/heartbeat"),
@@ -194,7 +203,10 @@ impl MasterClient {
     /// Claim räknas också som heartbeat på mastern: samma sekvens räcker,
     /// men varje anrop måste ha ett NYTT nummer.
     pub async fn claim(&self, node_id: &str, sequence: i64) -> Result<ClaimResponse> {
-        let body = serde_json::json!({ "sequence": sequence });
+        let body = serde_json::json!({
+            "sequence": sequence,
+            "agent_version": AGENT_VERSION,
+        });
         self.request(
             Method::POST,
             &format!("api/runtime/nodes/{node_id}/commands/claim"),

@@ -4,8 +4,10 @@
 FROM rust:1-alpine AS build
 RUN apk add --no-cache musl-dev
 WORKDIR /src
-COPY Cargo.toml Cargo.lock ./
+COPY Cargo.toml Cargo.lock build.rs ./
 COPY src ./src
+# Taggens namn kan ges som --build-arg; annars används git describe (om .git finns).
+ARG CRAFTPILOT_AGENT_VERSION
 RUN cargo build --release --locked
 
 FROM docker:27-cli

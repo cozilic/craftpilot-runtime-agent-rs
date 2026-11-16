@@ -1,5 +1,6 @@
 mod agent;
 mod api;
+mod build_info;
 mod config;
 mod docker;
 mod error;

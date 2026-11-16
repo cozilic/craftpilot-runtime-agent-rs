@@ -27,7 +27,12 @@ the Python agent — no master changes are required to run it side by side.
 - Private state file (`state.json`, `0700` directory / `0600` file) with the node ID, credential,
   pending enrollment and a strictly increasing heartbeat sequence, written atomically.
 - Heartbeat on startup, then `commands/claim` every poll interval (the master counts a claim as a
-  heartbeat, so each request consumes a new sequence number).- Acknowledgement with lease token, including the "lease expired" path.
+  heartbeat, so each request consumes a new sequence number).
+- The build version is baked in by `build.rs` — `CRAFTPILOT_AGENT_VERSION` (CI tag or Docker
+  `--build-arg`) or `git describe --tags --always`, normalized to the master's allowed format —
+  and is sent on enrollment, registration, heartbeat and every claim, so **Ops & log → Runtime
+  nodes** shows which agent a node actually runs (not a shared placeholder).
+- Acknowledgement with lease token, including the "lease expired" path.
 - **START** through the Docker CLI: derives `craftpilot-<server-id[0..8]>`, verifies the
   `craftpilot.managed=1` / `craftpilot.server_id` labels before touching an existing container,
   refuses images outside the allowlist and networks other than its own, mounts
@@ -139,6 +144,12 @@ cargo fmt --check
 cargo clippy --all-targets -- -D warnings
 cargo test
 cargo build --release
+```
+
+The Docker build takes the version from the tag (the image has no `.git`, so pass it in):
+
+```sh
+docker build --build-arg CRAFTPILOT_AGENT_VERSION="$(git describe --tags --always)" \n  -t craftpilot-runtime-agent-rs:dev .
 ```
 
 The Docker image is a multi-stage build: `rust:1-alpine` (musl) produces a static binary that is
