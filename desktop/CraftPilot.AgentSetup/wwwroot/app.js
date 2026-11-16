@@ -1,6 +1,6 @@
 const token = document.querySelector('meta[name="cp-token"]')?.content ?? '';
 const $ = (id) => document.getElementById(id);
-const state = { busy: false, loaded: false, dockerReady: false, installed: false, agentExists: false };
+const state = { busy: false, loaded: false, dockerReady: false, installed: false, agentExists: false, updating: false };
 
 async function api(path, options = {}) {
   const response = await fetch(path, {
@@ -64,9 +64,10 @@ function renderVersion(check) {
     banner.dataset.state = 'available';
     $('update-dot').className = 'dot dot-warn';
     $('update-title').textContent = `Ny panelversion ${versionLabel(check.latestVersion)} finns`;
-    $('update-text').textContent = `Du kör ${current}. Ladda ner den nya versionen från GitHub Releases.`;
+    $('update-text').textContent = `Du kör ${current}. Panelen hämtar filen från GitHub, kontrollerar kontrollsumman och startar om sig själv.`;
     link.href = check.releaseUrl;
     link.hidden = false;
+    $('update-now').hidden = false;
     return;
   }
 
@@ -77,11 +78,13 @@ function renderVersion(check) {
     $('update-title').textContent = 'Kunde inte kontrollera panelversionen';
     $('update-text').textContent = `${check.error} Klicka på Kontrollera igen för att försöka på nytt.`;
     link.hidden = true;
+    $('update-now').hidden = true;
     return;
   }
 
   banner.hidden = true;
   link.hidden = true;
+  $('update-now').hidden = true;
 }
 
 async function checkVersion() {
@@ -334,6 +337,7 @@ function applyControls() {
   $('startup').disabled = state.busy;
   $('load-logs').disabled = state.busy || !state.installed;
   $('prune-servers').disabled = state.busy || !state.dockerReady;
+  $('update-now').disabled = state.busy;
 }
 
 const TAB_IDS = ['main', 'settings', 'log'];
@@ -574,6 +578,50 @@ function install() {
 
 $('install').addEventListener('click', install);
 $('install-panel').addEventListener('click', install);
+// Hämtar panelens nästa version från GitHub, byter ut exen och startar om
+// panelen. Den här sidan stängs när den nya panelen tar över.
+async function runPanelUpdate() {
+  if (state.busy) {
+    return;
+  }
+
+  if (!window.confirm('Ladda ner ny panelversion nu? Panelen startar om när filen är utbytt.')) {
+    return;
+  }
+
+  setBusy(true);
+  state.updating = true;
+  startProgress('Laddar ner ny panelversion');
+  $('update-text').textContent = 'Laddar ner och kontrollerar den nya versionen…';
+  $('update-now').hidden = true;
+
+  try {
+    const result = await api('/api/panel-update', { method: 'POST', body: '{}' });
+    if (!result.ok) {
+      state.updating = false;
+      $('update-text').textContent = result.error ?? 'Uppdateringen misslyckades.';
+      $('update-now').hidden = false;
+      appendLog(`Uppdateringen misslyckades: ${result.error ?? 'okänt fel'}`);
+      return;
+    }
+
+    $('update-dot').className = 'dot dot-ok';
+    $('update-title').textContent = `Panel ${versionLabel(result.version)} är installerad`;
+    $('update-text').textContent = 'Panelen startar om…';
+    appendLog(`Panel ${versionLabel(result.version)} installerad. Panelen startar om.`);
+  } catch (error) {
+    state.updating = false;
+    $('update-text').textContent = `Uppdateringen misslyckades: ${error.message}`;
+    $('update-now').hidden = false;
+  } finally {
+    stopProgress();
+    if (!state.updating) {
+      setBusy(false);
+    }
+  }
+}
+
+$('update-now').addEventListener('click', runPanelUpdate);
 $('refresh').addEventListener('click', () => {
   refresh(true);
   checkVersion();
