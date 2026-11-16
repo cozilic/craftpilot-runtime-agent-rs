@@ -107,11 +107,20 @@ impl MasterClient {
         &self,
         hostname: &str,
         agent_version: &str,
+        reported_address: Option<&str>,
     ) -> Result<EnrollmentCreated> {
-        let body = serde_json::json!({
+        let mut body = serde_json::json!({
             "hostname": hostname,
             "agent_version": agent_version,
         });
+        // Agentens egen adress (2026-11-16): panelen föreslår den i
+        // claim-formuläret i stället för att gissa `host.docker.internal`.
+        // Utelämnas helt när den inte kunde avgöras, så body:n är oförändrad
+        // mot en master utan fältet.
+        if let Some(address) = reported_address {
+            body["reported_address"] = serde_json::Value::String(address.to_string());
+        }
+
         self.request(Method::POST, "api/runtime/enrollments", Some(&body), false)
             .await
     }

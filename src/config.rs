@@ -18,6 +18,11 @@ pub struct Config {
     pub server_data_root: PathBuf,
     pub agent_version: String,
     pub hostname: String,
+    /// Agentens egen adress (2026-11-16): den IP panelen/proxyn når maskinen
+    /// på. Rapporteras vid anmälan så claim-formuläret kan föreslå rätt värde
+    /// i stället för att gissa `host.docker.internal`. `None` när adressen
+    /// inte gick att avgöra — då utelämnas fältet (äldre beteende).
+    pub reported_address: Option<String>,
     pub poll_seconds: u64,
     /// Docker-nätverket som spelcontainrarna ansluts till.
     pub docker_network: String,
@@ -84,6 +89,7 @@ impl Config {
             server_data_root,
             agent_version: env!("CARGO_PKG_VERSION").to_string(),
             hostname: detect_hostname(),
+            reported_address: detect_host_address(),
             poll_seconds,
             docker_network,
             allowed_images: parse_image_list("CRAFTPILOT_ALLOWED_IMAGES", DEFAULT_ALLOWED_IMAGES),
@@ -200,6 +206,63 @@ fn parse_u64(key: &str, default: u64) -> Result<u64> {
     }
 }
 
+/// Agentens egen adress (2026-11-16). `CRAFTPILOT_HOST_ADDRESS` vinner — den
+/// finns för värden med flera nätkort eller en publik IP som inte är den
+/// utgående routen. Annars läses IP:n på det interface kerneln väljer för
+/// utgående trafik: en UDP-socket som "ansluts" till en publik adress skickar
+/// inga paket men tvingar fram en rutt, vilket ger maskinens LAN-IP.
+///
+/// Bara riktiga IP-adresser godtas, och loopback/länklokala avvisas — panelen
+/// validerar värdet som adress, och ett felaktigt förslag är sämre än inget.
+fn detect_host_address() -> Option<String> {
+    if let Ok(raw) = std::env::var("CRAFTPILOT_HOST_ADDRESS") {
+        if let Some(address) = sanitize_host_address(&raw) {
+            return Some(address);
+        }
+    }
+
+    // I en container är "den egna adressen" containerns brygga (172.x), som
+    // varken panelen eller spelare når — sämre än panelens default. Kör
+    // agenten direkt på värden (desktop-installationen) gäller auto-detekten;
+    // i container får `CRAFTPILOT_HOST_ADDRESS` styra om något ska rapporteras.
+    if std::path::Path::new("/.dockerenv").exists() {
+        return None;
+    }
+
+    let socket = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
+    socket.connect("1.1.1.1:80").ok()?;
+    let address = socket.local_addr().ok()?.ip();
+
+    sanitize_host_address(&address.to_string())
+}
+
+/// Normaliserar och godkänner en adresskandidat. `None` för allt som inte är
+/// en användbar mottagaradress: loopback, `0.0.0.0`, broadcast, länklokal
+/// (`169.254.0.0/16`, `fe80::/10`) och värdnamn (t.ex. `host.docker.internal`).
+fn sanitize_host_address(raw: &str) -> Option<String> {
+    let address: std::net::IpAddr = raw.trim().parse().ok()?;
+
+    if address.is_loopback() || address.is_unspecified() {
+        return None;
+    }
+
+    match address {
+        std::net::IpAddr::V4(ipv4) => {
+            if ipv4.is_link_local() || ipv4.is_broadcast() {
+                return None;
+            }
+        }
+        std::net::IpAddr::V6(ipv6) => {
+            // fe80::/10 är länklokal och bara meningsfull på en specifik länk.
+            if (ipv6.segments()[0] & 0xffc0) == 0xfe80 {
+                return None;
+            }
+        }
+    }
+
+    Some(address.to_string())
+}
+
 /// `/etc/hostname` först (containern), sedan HOSTNAME/COMPUTERNAME.
 /// Mastern validerar `^[A-Za-z0-9][A-Za-z0-9._-]*$`, så allt annat tas bort
 /// och ett tomt värde faller tillbaka på ett neutralt namn.
@@ -261,6 +324,47 @@ mod tests {
         assert!(is_docker_name("cp_net.1"));
         assert!(!is_docker_name("craftpilot servers"));
         assert!(!is_docker_name(""));
+    }
+
+    #[test]
+    fn reported_address_accepts_lan_and_public_ips() {
+        // Både LAN- och publika adresser är användbara för panelen; det är
+        // claim-formuläret som föreslår dem och ägaren som bekräftar.
+        assert_eq!(
+            sanitize_host_address(" 192.168.1.42 ").as_deref(),
+            Some("192.168.1.42")
+        );
+        assert_eq!(
+            sanitize_host_address("10.0.0.5").as_deref(),
+            Some("10.0.0.5")
+        );
+        assert_eq!(
+            sanitize_host_address("203.0.113.7").as_deref(),
+            Some("203.0.113.7")
+        );
+        assert_eq!(
+            sanitize_host_address("2001:db8::1").as_deref(),
+            Some("2001:db8::1")
+        );
+    }
+
+    #[test]
+    fn reported_address_rejects_unusable_candidates() {
+        // Loopback, ospecificerad, broadcast och länklokal når ingen annan
+        // maskin; ett värdnamn (t.ex. host.docker.internal) är ingen IP alls.
+        for raw in [
+            "127.0.0.1",
+            "::1",
+            "0.0.0.0",
+            "255.255.255.255",
+            "169.254.10.1",
+            "fe80::1",
+            "host.docker.internal",
+            "",
+            "192.168.1.300",
+        ] {
+            assert_eq!(sanitize_host_address(raw), None, "{raw} ska avvisas");
+        }
     }
 
     #[test]
