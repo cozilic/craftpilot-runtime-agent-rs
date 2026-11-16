@@ -38,6 +38,20 @@
               aria-controls="tab-log" aria-selected="false" tabindex="-1">Logg</button>
     </nav>
 
+    <div class="progress" id="progress" hidden>
+      <div class="progress-head">
+        <span class="progress-label" id="progress-label">Arbetar…</span>
+        <div class="progress-meta">
+          <span id="progress-elapsed">0 s</span>
+          <button class="button button-link" id="show-log" type="button">Visa logg</button>
+        </div>
+      </div>
+      <div class="progress-track" id="progress-track" role="progressbar"
+           aria-label="Åtgärd pågår" aria-valuetext="Pågår">
+        <div class="progress-fill"></div>
+      </div>
+    </div>
+
     <main>
       <section class="tab-panel" id="tab-main" role="tabpanel" aria-labelledby="tab-button-main">
         <section class="hero">

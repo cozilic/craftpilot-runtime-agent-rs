@@ -484,6 +484,41 @@ function setBusy(busy) {
   applyControls();
 }
 
+let progressTimer = null;
+let progressStartedAt = 0;
+
+// Panelen får inget delresultat från agenten, så baren är obestämd och visar
+// i stället hur länge åtgärden har pågått. Fliken byts aldrig automatiskt.
+function startProgress(label) {
+  const bar = $('progress');
+  const track = $('progress-track');
+  if (!bar || !track) {
+    return;
+  }
+
+  progressStartedAt = Date.now();
+  $('progress-label').textContent = label;
+  $('progress-elapsed').textContent = '0 s';
+  track.setAttribute('aria-valuetext', label);
+  bar.hidden = false;
+
+  window.clearInterval(progressTimer);
+  progressTimer = window.setInterval(() => {
+    const seconds = Math.max(0, Math.round((Date.now() - progressStartedAt) / 1000));
+    $('progress-elapsed').textContent = `${seconds} s`;
+    track.setAttribute('aria-valuetext', `${label}, ${seconds} sekunder`);
+  }, 250);
+}
+
+function stopProgress() {
+  window.clearInterval(progressTimer);
+  progressTimer = null;
+  const bar = $('progress');
+  if (bar) {
+    bar.hidden = true;
+  }
+}
+
 async function runOperation(path, body, label) {
   if (state.busy) {
     return;
@@ -495,8 +530,7 @@ async function runOperation(path, body, label) {
   }
 
   setBusy(true);
-  // Åtgärden skriver sin utdata i loggen: visa den fliken direkt.
-  selectTab('log');
+  startProgress(label);
   appendLog(`\n> ${label}…`);
 
   try {
@@ -523,6 +557,7 @@ async function runOperation(path, body, label) {
   } catch (error) {
     appendLog(`Fel: ${error.message}`);
   } finally {
+    stopProgress();
     setBusy(false);
   }
 }
@@ -544,6 +579,7 @@ $('refresh').addEventListener('click', () => {
   checkVersion();
 });
 $('load-logs').addEventListener('click', loadLogs);
+$('show-log').addEventListener('click', () => selectTab('log'));
 
 // Städar bort servercontainrar som inte körs. Servernas filer ligger kvar på
 // disken, så en start i mastern skapar en ny container med samma data.
