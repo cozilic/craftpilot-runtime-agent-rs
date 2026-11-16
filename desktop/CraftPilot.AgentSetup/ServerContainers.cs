@@ -77,4 +77,22 @@ public static class ServerContainers
             .ThenBy(server => server.Name, StringComparer.Ordinal)
             .ToList();
     }
+
+    /// <summary>
+    /// Containrar som panelen får städa bort: stoppade containrar med agentens
+    /// eget namn. Körda containrar lämnas alltid i fred.
+    /// </summary>
+    public static IReadOnlyList<ServerContainer> Stopped(IEnumerable<ServerContainer> servers) =>
+        servers
+            .Where(server => !server.Running && IsManagedName(server.Name))
+            .ToList();
+
+    /// <summary>
+    /// Agenten döper containrar till <c>craftpilot-</c> plus åtta hextecken.
+    /// Panelen rör bara namn i den formen.
+    /// </summary>
+    public static bool IsManagedName(string? name) =>
+        name is { Length: 19 } &&
+        name.StartsWith("craftpilot-", StringComparison.Ordinal) &&
+        name[11..].All(character => character is >= '0' and <= '9' or >= 'a' and <= 'f');
 }

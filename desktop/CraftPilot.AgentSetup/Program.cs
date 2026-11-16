@@ -82,6 +82,9 @@ app.MapPost("/api/remove", async (AgentSetupService service, CancellationToken c
     Results.Ok(await service.RemoveAsync(ct)));
 
 // Avbryter en pågående docker-åtgärd (installera, uppdatera, stoppa, ta bort).
+app.MapPost("/api/servers/prune", async (AgentSetupService service, CancellationToken ct) =>
+    Results.Ok(await service.PruneServersAsync(ct)));
+
 app.MapPost("/api/cancel", (SetupSession session) =>
     Results.Ok(new { ok = session.Cancel() }));
 

@@ -141,7 +141,10 @@
               <p class="eyebrow">Servrar</p>
               <h2 id="servers-title">Servrar på den här noden</h2>
             </div>
-            <span class="badge badge-idle" id="servers-count">0</span>
+            <div class="panel-actions">
+              <button class="button button-quiet" id="prune-servers" type="button" hidden>Rensa stoppade</button>
+              <span class="badge badge-idle" id="servers-count">0</span>
+            </div>
           </div>
           <p class="server-empty" id="servers-empty">
             Här listas de servrar som agenten kör på den här datorn. Skapa en server i panelen på
