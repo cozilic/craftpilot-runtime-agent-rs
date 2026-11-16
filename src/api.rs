@@ -388,6 +388,38 @@ impl MasterClient {
         Ok(response)
     }
 
+    /// Hämtar serverns artefakt (pumpkin-binär eller jar) som mastern stageat
+    /// och verifierat. Samma lease-header som uppladdningen: leasen, inte
+    /// URL:en, avgör vem som får läsa blobben.
+    pub async fn fetch_artifact(
+        &self,
+        node_id: &str,
+        command_id: &str,
+        lease_token: &str,
+    ) -> Result<reqwest::Response> {
+        let credential = self.credential.as_deref().ok_or(AgentError::Unauthorized)?;
+        let response = self
+            .http
+            .get(self.url(&format!(
+                "api/runtime/nodes/{node_id}/commands/{command_id}/artifact"
+            ))?)
+            .header("X-Result-Lease", lease_token)
+            .bearer_auth(credential)
+            .send()
+            .await?;
+        let status = response.status();
+        if status == StatusCode::UNAUTHORIZED {
+            return Err(AgentError::Unauthorized);
+        }
+        if !status.is_success() {
+            return Err(AgentError::Rejected {
+                status: status.as_u16(),
+                body: String::new(),
+            });
+        }
+        Ok(response)
+    }
+
     /// Migration relay: the lease identifies the command, the body is the
     /// chunk ciphertext. Bodies stay under the master's 1 MiB + 16 limit.
     pub async fn put_migration_manifest(

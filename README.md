@@ -79,6 +79,16 @@ the Python agent — no master changes are required to run it side by side.
   master's remote file-tree cache fresh: agent mutations invalidate the affected directory, the
   index is rescanned every 30 seconds for changes made directly on the host, and deltas are sent
   in batches of 20 to `/file-tree` with progress reported to `/file-tree/progress`.
+- **ARTIFACT INSTALL** (`install_artifact`): the master stages and verifies the server artifact
+  (the native `pumpkin` binary or the jar the startup command runs) and queues the install. The
+  agent refuses a running container, validates the payload filename/size/digest, streams the blob
+  from its leased `commands/{id}/artifact` URL (bounded by `CRAFTPILOT_MAX_UPLOAD_BYTES`), checks
+  the byte count and SHA-256 while streaming, writes `.cp-artifact-*` in the server root,
+  `fsync`s it, sets `0755` for the native binary (`0644` for a jar) and replaces the target with
+  one atomic rename. Answers `ARTIFACT_INSTALLED` with `"<filename> <bytes> <sha256>"` (the exact
+  triple the master validates), or `ARTIFACT_DIGEST_MISMATCH`, `ARTIFACT_TOO_LARGE`,
+  `ARTIFACT_TARGET_BUSY` / `ARTIFACT_INVALID`. The panel's "installed" flag remains the master's
+  next server report, not the ack.
 - **CONSOLE**: writes one attributed line to the game's console FIFO with the same argv shape as
   the master's own Docker adapter (`docker exec <name> sh -c 'printf … > /tmp/.craftpilot-console'
   sh <command>`), so the command is never interpolated into a shell script. Requires the container
