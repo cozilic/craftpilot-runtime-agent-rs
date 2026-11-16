@@ -1013,3 +1013,19 @@ h1 span {
     opacity: 0.55;
   }
 }
+
+/* Panelens exe-nedladdning vet sin storlek: fyll baren i procent. Docker-
+   åtgärderna har ingen delprogress och behåller den glidande baren. */
+.progress[data-mode="determinate"] .progress-fill {
+  left: 0;
+  width: var(--progress, 0%);
+  animation: none;
+  opacity: 1;
+  transition: width 0.25s ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .progress[data-mode="determinate"] .progress-fill {
+    transition: none;
+  }
+}
