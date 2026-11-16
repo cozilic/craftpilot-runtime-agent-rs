@@ -107,6 +107,8 @@ jobs:
           context: .
           push: false
           load: true
+          build-args: |
+            CRAFTPILOT_AGENT_VERSION=${{ steps.meta.outputs.version }}
           tags: ${{ env.IMAGE_NAME }}:pr-${{ github.event.pull_request.number }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
@@ -134,6 +136,8 @@ jobs:
         with:
           context: .
           push: true
+          build-args: |
+            CRAFTPILOT_AGENT_VERSION=${{ steps.meta.outputs.version }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
