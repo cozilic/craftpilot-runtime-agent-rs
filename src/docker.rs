@@ -40,6 +40,9 @@ pub struct StopOutcome {
 pub struct ContainerState {
     pub running: bool,
     pub exit_code: i64,
+    /// Unix-tid för när containern startade (Dockers `State.StartedAt`).
+    /// Används för uptime i telemetrin; None när tiden inte går att läsa.
+    pub started_at_epoch: Option<i64>,
 }
 
 pub struct ContainerStats {
@@ -337,6 +340,10 @@ impl Docker {
         Ok(Some(ContainerState {
             running: value.get("Running").and_then(Value::as_bool) == Some(true),
             exit_code: value.get("ExitCode").and_then(Value::as_i64).unwrap_or(0),
+            started_at_epoch: value
+                .get("StartedAt")
+                .and_then(Value::as_str)
+                .and_then(parse_rfc3339_epoch),
         }))
     }
 
@@ -822,6 +829,52 @@ fn set_mode(path: &Path, mode: u32) -> Result<()> {
     Ok(())
 }
 
+/// RFC3339 till Unix-sekunder. Docker rapporterar alltid UTC (`Z`) för
+/// `State.StartedAt`, med valfri bråkdel som ignoreras. En egen parser håller
+/// agenten fri från en datumdependency för ett enda fält.
+fn parse_rfc3339_epoch(raw: &str) -> Option<i64> {
+    let raw = raw.trim();
+    if raw.len() < 20
+        || !raw.ends_with('Z')
+        || raw.as_bytes().get(4) != Some(&b'-')
+        || raw.as_bytes().get(7) != Some(&b'-')
+        || raw.as_bytes().get(10) != Some(&b'T')
+        || raw.as_bytes().get(13) != Some(&b':')
+        || raw.as_bytes().get(16) != Some(&b':')
+    {
+        return None;
+    }
+
+    let year: i64 = raw.get(0..4)?.parse().ok()?;
+    let month: u32 = raw.get(5..7)?.parse().ok()?;
+    let day: u32 = raw.get(8..10)?.parse().ok()?;
+    let hour: i64 = raw.get(11..13)?.parse().ok()?;
+    let minute: i64 = raw.get(14..16)?.parse().ok()?;
+    let second: i64 = raw.get(17..19)?.parse().ok()?;
+    if !(1..=12).contains(&month)
+        || !(1..=31).contains(&day)
+        || !(0..24).contains(&hour)
+        || !(0..60).contains(&minute)
+        || !(0..=60).contains(&second)
+    {
+        return None;
+    }
+
+    Some(days_from_civil(year, month, day) * 86_400 + hour * 3_600 + minute * 60 + second)
+}
+
+/// Dagar sedan 1970-01-01 enligt Howard Hinnants civil-algoritm.
+fn days_from_civil(year: i64, month: u32, day: u32) -> i64 {
+    let year = if month <= 2 { year - 1 } else { year };
+    let era = if year >= 0 { year } else { year - 399 } / 400;
+    let year_of_era = year - era * 400;
+    let month_prime = (i64::from(month) + 9) % 12;
+    let day_of_year = (153 * month_prime + 2) / 5 + i64::from(day) - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+
+    era * 146_097 + day_of_era - 719_468
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -855,6 +908,21 @@ mod tests {
             vec!["eclipse-temurin:21-jre".to_string()],
             30,
         )
+    }
+
+    #[test]
+    fn parses_docker_started_at_as_epoch_seconds() {
+        assert_eq!(parse_rfc3339_epoch("1970-01-01T00:00:00Z"), Some(0));
+        assert_eq!(
+            parse_rfc3339_epoch("2000-01-01T00:00:00Z"),
+            Some(946_684_800)
+        );
+        assert_eq!(
+            parse_rfc3339_epoch("2026-11-12T13:00:00.123456789Z"),
+            Some(1_794_488_400)
+        );
+        assert_eq!(parse_rfc3339_epoch("not-a-date"), None);
+        assert_eq!(parse_rfc3339_epoch("2026-13-12T13:00:00Z"), None);
     }
 
     #[test]
