@@ -43,6 +43,30 @@ pub struct Config {
 }
 
 impl Config {
+    /// Minimal konfiguration för agenttesterna: bara masterns adress och
+    /// state-katalogen varierar, resten är fasta värden.
+    #[cfg(test)]
+    pub fn for_test(master_url: Url, state_dir: PathBuf) -> Self {
+        Self {
+            master_url,
+            node_id: None,
+            registration_token: None,
+            server_data_root: state_dir.join("servers"),
+            agent_version: "test-agent".to_string(),
+            hostname: "test-host".to_string(),
+            reported_address: None,
+            poll_seconds: 5,
+            docker_network: "craftpilot-servers".to_string(),
+            allowed_images: Vec::new(),
+            stop_grace_seconds: 1,
+            docker_data_root: None,
+            data_gid: 33,
+            max_edit_bytes: 1024 * 1024,
+            max_upload_bytes: 4 * 1024 * 1024,
+            state_dir,
+        }
+    }
+
     pub fn from_env() -> Result<Self> {
         let master_url =
             parse_https_origin(&env_or("CRAFTPILOT_MASTER_URL", "https://craftpilot.se"))?;

@@ -22,8 +22,9 @@ the Python agent — no master changes are required to run it side by side.
 
 - Self-enrollment: files a request, polls until a sysadmin approves it under
   **Ops & log → Runtime nodes**, stores the credential and completes the request.
-- Replacement enrollment when the master rejects the credential (node deleted/disabled), and a
-  fresh request when a pending/expired enrollment is no longer known to the master.
+- Replacement enrollment when the master rejects the credential (node deleted/disabled) — also on
+  startup, so a restart after the node was removed always ends with a fresh claim code — and a fresh
+  request when a pending/expired enrollment is no longer known to the master.
 - Private state file (`state.json`, `0700` directory / `0600` file) with the node ID, credential,
   pending enrollment and a strictly increasing heartbeat sequence, written atomically.
 - Heartbeat on startup, then `commands/claim` every poll interval (the master counts a claim as a
