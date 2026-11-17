@@ -95,10 +95,7 @@ impl MasterClient {
             status if status.is_success() => {
                 serde_json::from_str::<T>(&body).map_err(AgentError::from)
             }
-            status => Err(AgentError::Rejected {
-                status: status.as_u16(),
-                body,
-            }),
+            status => Err(request_error(status.as_u16(), body)),
         }
     }
 
@@ -553,4 +550,18 @@ impl MasterClient {
         )
         .await
     }
+}
+
+/// Masterns felkod för en anmälan som en sysadmin har avvisat. Den ska
+/// agenten inte svara på med ett nytt ärende.
+pub const ENROLLMENT_REJECTED_CODE: &str = "RUNTIME_NODE_ENROLLMENT_REJECTED";
+
+/// Ett avvisat ärende är inte ett okänt ärende: 403 med masterns kod blir
+/// `EnrollmentRejected`, allt annat behåller status och body.
+fn request_error(status: u16, body: String) -> AgentError {
+    if status == 403 && body.contains(ENROLLMENT_REJECTED_CODE) {
+        return AgentError::EnrollmentRejected;
+    }
+
+    AgentError::Rejected { status, body }
 }

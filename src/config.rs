@@ -24,6 +24,9 @@ pub struct Config {
     /// inte gick att avgöra — då utelämnas fältet (äldre beteende).
     pub reported_address: Option<String>,
     pub poll_seconds: u64,
+    /// Hur länge en avvisad anmälan inte får ersättas av en ny (24 h). Inkorgen
+    /// ska inte fyllas med dubbletter medan sysadminen redan har sagt nej.
+    pub enrollment_rejected_retry_seconds: u64,
     /// Docker-nätverket som spelcontainrarna ansluts till.
     pub docker_network: String,
     /// Exakta image-namn agenten får starta (masterns Java-lista + Pumpkin).
@@ -56,6 +59,7 @@ impl Config {
             hostname: "test-host".to_string(),
             reported_address: None,
             poll_seconds: 5,
+            enrollment_rejected_retry_seconds: 24 * 60 * 60,
             docker_network: "craftpilot-servers".to_string(),
             allowed_images: Vec::new(),
             stop_grace_seconds: 1,
@@ -116,6 +120,7 @@ impl Config {
             hostname: detect_hostname(),
             reported_address: detect_host_address(),
             poll_seconds,
+            enrollment_rejected_retry_seconds: 24 * 60 * 60,
             docker_network,
             allowed_images: parse_image_list("CRAFTPILOT_ALLOWED_IMAGES", DEFAULT_ALLOWED_IMAGES),
             stop_grace_seconds,

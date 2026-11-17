@@ -33,6 +33,13 @@ pub enum AgentError {
     #[error("the master rejected the request: {status} {body}")]
     Rejected { status: u16, body: String },
 
+    /// 403 `RUNTIME_NODE_ENROLLMENT_REJECTED`: en sysadmin avvisade anmälan.
+    /// Det är inte samma sak som ett okänt ärende — agenten ska sluta fråga i
+    /// stället för att fil:a ett nytt (inkorgen ska inte fyllas med
+    /// dubbletter).
+    #[error("the sysadmin rejected the enrollment request")]
+    EnrollmentRejected,
+
     /// Ett kommando som mastern bad om men som agenten inte kunde utföra.
     /// Texten hamnar i ack:ens `message` (max 300 tecken).
     #[error("{0}")]
