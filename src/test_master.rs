@@ -26,6 +26,11 @@ pub const NEW_CREDENTIAL: &str = "credential-from-the-new-node";
 pub enum PollOutcome {
     Approved,
     Pending,
+    /// Claim-code svarar 403 `RUNTIME_NODE_ENROLLMENT_REJECTED`: ärendet finns
+    /// kvar men en sysadmin har avvisat det.
+    RejectedClaimCode,
+    /// Claim-code ger en färsk kod men poll svarar `rejected`.
+    RejectedPoll,
 }
 
 /// En request som fejk-mastern tog emot, så testet kan se i vilken ordning
@@ -49,6 +54,14 @@ impl FakeMaster {
 
     pub async fn start_waiting() -> Self {
         Self::start_with(PollOutcome::Pending).await
+    }
+
+    pub async fn start_rejecting_claim_code() -> Self {
+        Self::start_with(PollOutcome::RejectedClaimCode).await
+    }
+
+    pub async fn start_rejecting_poll() -> Self {
+        Self::start_with(PollOutcome::RejectedPoll).await
     }
 
     async fn start_with(outcome: PollOutcome) -> Self {
@@ -175,7 +188,21 @@ fn response(
     }
 
     if path.ends_with("/claim-code") {
-        return unauthorized();
+        return match outcome {
+            PollOutcome::RejectedClaimCode => (
+                "403 Forbidden",
+                json!({ "error": "RUNTIME_NODE_ENROLLMENT_REJECTED" }).to_string(),
+            ),
+            PollOutcome::RejectedPoll => (
+                "200 OK",
+                json!({
+                    "claim_code": NEW_CLAIM_CODE,
+                    "claim_expires_at": "2026-11-17T20:00:00+00:00",
+                })
+                .to_string(),
+            ),
+            _ => unauthorized(),
+        };
     }
 
     if method == "POST" && path == "/api/runtime/enrollments" {
@@ -194,13 +221,17 @@ fn response(
     }
 
     if path.ends_with("/poll") {
+        if outcome == PollOutcome::RejectedPoll {
+            return ("200 OK", json!({ "status": "rejected" }).to_string());
+        }
         if !path.contains(NEW_REQUEST_ID) {
             // Ett ärende mastern inte känner igen: samma 401 som en borttagen nod.
             return unauthorized();
         }
 
         return match outcome {
-            PollOutcome::Approved => (
+            PollOutcome::Pending => ("200 OK", json!({"status": "pending"}).to_string()),
+            PollOutcome::Approved | PollOutcome::RejectedClaimCode | PollOutcome::RejectedPoll => (
                 "200 OK",
                 json!({
                     "status": "approved",
@@ -210,7 +241,6 @@ fn response(
                 })
                 .to_string(),
             ),
-            PollOutcome::Pending => ("200 OK", json!({"status": "pending"}).to_string()),
         };
     }
 

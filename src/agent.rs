@@ -222,12 +222,52 @@ impl Agent {
             .await?;
         }
         let enrollment = created.into_enrollment();
-        self.store.state_mut().enrollment = Some(enrollment.clone());
+        {
+            let state = self.store.state_mut();
+            state.enrollment = Some(enrollment.clone());
+            // Ett nytt ärende betyder att en tidigare avvisning inte längre
+            // spärrar något; nästa avvisning sätter tiden på nytt.
+            state.enrollment_rejected_at = None;
+        }
         self.store.save()?;
         Ok(enrollment)
     }
 
+    /// Hur länge kvar en avvisad anmälan spärrar nya ärenden.
+    fn rejection_wait(&self) -> Option<Duration> {
+        let rejected_at = self.store.state().enrollment_rejected_at?;
+        let ready_at = rejected_at.saturating_add(self.cfg.enrollment_rejected_retry_seconds);
+        let now = unix_seconds();
+        (ready_at > now).then(|| Duration::from_secs(ready_at - now))
+    }
+
+    /// En avvisning är terminal för det ärendet: ärendet och den döda koden
+    /// tas bort och tiden sparas, så varken nästa poll eller en omstart fil:ar
+    /// ett nytt ärende.
+    fn record_enrollment_rejection(&mut self) -> Result<()> {
+        {
+            let state = self.store.state_mut();
+            state.enrollment = None;
+            state.enrollment_rejected_at = Some(unix_seconds());
+        }
+        self.store.save()?;
+        if let Err(err) = self.store.clear_identity_file() {
+            warn!(error = %err, "could not remove the rejected identity.conf");
+        }
+        Ok(())
+    }
+
     async fn self_enroll(&mut self) -> Result<()> {
+        // En avvisad anmälan får inte bli en ny förfrågan varje poll: inkorgen
+        // ska inte fyllas med dubbletter medan sysadminen redan sagt nej.
+        while let Some(wait) = self.rejection_wait() {
+            warn!(
+                retry_in_seconds = wait.as_secs(),
+                "the sysadmin rejected the enrollment request — waiting before filing another one"
+            );
+            sleep(wait).await;
+        }
+
         let mut enrollment = match self.store.state().enrollment.clone() {
             Some(saved) => {
                 // Ny start med ett sparat ärende: förnya koden så den som
@@ -257,6 +297,16 @@ impl Agent {
                             "the saved enrollment request is gone — filing a new one"
                         );
                         self.create_enrollment().await?
+                    }
+                    // En sysadmin har avvisat ärendet. Det är inte samma sak
+                    // som att mastern glömt det: fil:a inget nytt.
+                    Err(AgentError::EnrollmentRejected) => {
+                        warn!(
+                            request_id = %saved.request_id,
+                            "the sysadmin rejected the enrollment request — not filing another one"
+                        );
+                        self.record_enrollment_rejection()?;
+                        return Err(AgentError::EnrollmentRejected);
                     }
                     Err(err) => {
                         warn!(
@@ -328,11 +378,12 @@ impl Agent {
                 }
                 "pending" => sleep(Duration::from_secs(15)).await,
                 "rejected" => {
-                    warn!(request_id = %enrollment.request_id, "the enrollment request was rejected");
-                    return Err(AgentError::Rejected {
-                        status: 403,
-                        body: "the enrollment request was rejected".to_string(),
-                    });
+                    warn!(
+                        request_id = %enrollment.request_id,
+                        "the sysadmin rejected the enrollment request — not filing another one"
+                    );
+                    self.record_enrollment_rejection()?;
+                    return Err(AgentError::EnrollmentRejected);
                 }
                 "expired" | "invalid" | "completed" => {
                     // Ett borta/gammalt ärende får aldrig retras för evigt
@@ -369,8 +420,14 @@ impl Agent {
                         if needs_new_credential(&err) {
                             warn!("the master rejected the credential — filing a replacement enrollment request");
                             self.forget_credential()?;
-                            if let Err(enroll_err) = self.self_enroll().await {
-                                warn!(error = %enroll_err, "re-enrollment failed; retrying on the next poll");
+                            match self.self_enroll().await {
+                                Ok(()) => {}
+                                Err(AgentError::EnrollmentRejected) => warn!(
+                                    "the sysadmin rejected the replacement enrollment request; not filing another one"
+                                ),
+                                Err(enroll_err) => {
+                                    warn!(error = %enroll_err, "re-enrollment failed; retrying on the next poll");
+                                }
                             }
                         } else {
                             warn!(error = %err, "poll failed");
@@ -1111,6 +1168,15 @@ fn needs_new_credential(err: &AgentError) -> bool {
     matches!(err, AgentError::Unauthorized)
 }
 
+/// Sekunder sedan epoch. Används för att mäta väntetiden efter en avvisad
+/// anmälan; någon kronometer behövs inte i state-filen.
+fn unix_seconds() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs())
+        .unwrap_or_default()
+}
+
 /// Mastern tillåter högst 300 tecken i ack:ens `message`; ett längre
 /// Docker-fel ska trunkeras, inte göra acken ogiltig.
 fn ack_message(error: &AgentError) -> String {
@@ -1191,7 +1257,7 @@ fn deletable_server_data(root: &Path, server_id: &str) -> Result<Option<PathBuf>
 mod tests {
     use std::path::PathBuf;
 
-    use super::{deletable_server_data, needs_new_credential, sha256_hex, Agent};
+    use super::{deletable_server_data, needs_new_credential, sha256_hex, unix_seconds, Agent};
     use crate::config::Config;
     use crate::error::AgentError;
     use crate::state::{Enrollment, StateStore};
@@ -1350,6 +1416,124 @@ mod tests {
         }
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// En sysadmin som avvisar anmälan ska stänga dörren, inte öppna en ny:
+    /// agenten får 403 `RUNTIME_NODE_ENROLLMENT_REJECTED` i stället för 401 och
+    /// fil:ar då inget ärende. Förut blev det ett nytt ärende per poll och
+    /// omstart, så inkorgen fylldes med dubbletter.
+    #[tokio::test]
+    async fn a_rejected_enrollment_is_not_filed_again() {
+        let master = FakeMaster::start_rejecting_claim_code().await;
+        let state_dir = temp_state_dir("rejected-enrollment");
+        {
+            let mut store = StateStore::open(&state_dir).unwrap();
+            store.state_mut().enrollment = Some(Enrollment {
+                request_id: "rejected-request".to_string(),
+                request_secret: "rejected-secret".to_string(),
+            });
+            store.save().unwrap();
+        }
+
+        let mut agent = Agent::new(Config::for_test(master.url(), state_dir.clone())).unwrap();
+        let err = agent.self_enroll().await.unwrap_err();
+        assert!(matches!(err, AgentError::EnrollmentRejected), "{err}");
+
+        let requests = master.requests();
+        assert_eq!(
+            requests.len(),
+            1,
+            "bara claim-code ska ha frågats: {requests:?}"
+        );
+        assert!(requests[0].path.ends_with("/claim-code"));
+
+        let store = StateStore::open(&state_dir).unwrap();
+        assert!(store.state().enrollment.is_none());
+        assert!(store.state().enrollment_rejected_at.is_some());
+        assert!(!state_dir.join("identity.conf").exists());
+
+        // En omstart får inte heller fil:a något: väntetiden gäller.
+        let mut restarted = Agent::new(Config::for_test(master.url(), state_dir.clone())).unwrap();
+        let waited = tokio::time::timeout(
+            std::time::Duration::from_millis(400),
+            restarted.self_enroll(),
+        )
+        .await;
+        assert!(
+            waited.is_err(),
+            "agenten ska vänta ut avvisningen, inte fråga igen"
+        );
+        assert_eq!(master.requests().len(), 1, "ingen ny request efter omstart");
+    }
+
+    /// Avvisningen är inte en permanent spärr: när väntetiden gått får agenten
+    /// fråga igen, men då med ett enda nytt ärende.
+    #[tokio::test]
+    async fn a_rejected_enrollment_is_retried_after_the_wait() {
+        let master = FakeMaster::start().await;
+        let state_dir = temp_state_dir("rejected-wait-over");
+        {
+            let mut store = StateStore::open(&state_dir).unwrap();
+            store.state_mut().enrollment_rejected_at = Some(unix_seconds().saturating_sub(10));
+            store.save().unwrap();
+        }
+
+        let mut cfg = Config::for_test(master.url(), state_dir.clone());
+        cfg.enrollment_rejected_retry_seconds = 1;
+        let mut agent = Agent::new(cfg).unwrap();
+        agent.self_enroll().await.unwrap();
+
+        let requests = master.requests();
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|request| request.path == "/api/runtime/enrollments")
+                .count(),
+            1,
+            "exakt ett nytt ärende: {requests:?}"
+        );
+        let store = StateStore::open(&state_dir).unwrap();
+        assert_eq!(store.state().credential.as_deref(), Some(NEW_CREDENTIAL));
+        assert!(
+            store.state().enrollment_rejected_at.is_none(),
+            "ett godkänt ärende rensar spärren"
+        );
+    }
+
+    /// Mastern kan också svara `rejected` på själva poll:en. Även den vägen
+    /// ska stänga utan ett nytt ärende.
+    #[tokio::test]
+    async fn a_poll_that_reports_a_rejection_stops_without_a_new_request() {
+        let master = FakeMaster::start_rejecting_poll().await;
+        let state_dir = temp_state_dir("rejected-poll");
+        {
+            let mut store = StateStore::open(&state_dir).unwrap();
+            store.state_mut().enrollment = Some(Enrollment {
+                request_id: "rejected-request".to_string(),
+                request_secret: "rejected-secret".to_string(),
+            });
+            store.save().unwrap();
+        }
+
+        let mut agent = Agent::new(Config::for_test(master.url(), state_dir.clone())).unwrap();
+        let err = agent.self_enroll().await.unwrap_err();
+        assert!(matches!(err, AgentError::EnrollmentRejected), "{err}");
+
+        let requests = master.requests();
+        assert!(requests
+            .iter()
+            .any(|request| request.path.ends_with("/poll")));
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|request| request.path == "/api/runtime/enrollments")
+                .count(),
+            0,
+            "ingen ny anmälan: {requests:?}"
+        );
+        let store = StateStore::open(&state_dir).unwrap();
+        assert!(store.state().enrollment.is_none());
+        assert!(store.state().enrollment_rejected_at.is_some());
     }
 
     #[test]

@@ -18,6 +18,13 @@ pub struct AgentState {
     pub credential: Option<String>,
     #[serde(default)]
     pub enrollment: Option<Enrollment>,
+    /// Unix-tid (sekunder) för senaste avvisade anmälan. En avvisad nod får
+    /// inte fil:a ett nytt ärende vid varje poll eller omstart — det fyller
+    /// sysadminens inkorg med dubbletter. Fältet rensas när ett nytt ärende
+    /// fil:as, och agenten väntar `enrollment_rejected_retry_seconds` innan
+    /// den frågar igen.
+    #[serde(default)]
+    pub enrollment_rejected_at: Option<u64>,
     #[serde(default)]
     pub heartbeat_sequence: u64,
     /// Per-server RCON-lösenord (samma fält som Python-agenten). Skapas vid
