@@ -24,6 +24,10 @@ pub struct Config {
     /// inte gick att avgöra — då utelämnas fältet (äldre beteende).
     pub reported_address: Option<String>,
     pub poll_seconds: u64,
+    /// Hur ofta en väntande anmälan förnyar sin claim-kod. Koden lever 30 min
+    /// hos mastern, så en anmälan som ligger kvar länge annars tappar koden och
+    /// ägaren måste starta om agenten för att få en ny.
+    pub claim_code_refresh_seconds: u64,
     /// Hur länge en avvisad anmälan inte får ersättas av en ny (24 h). Inkorgen
     /// ska inte fyllas med dubbletter medan sysadminen redan har sagt nej.
     pub enrollment_rejected_retry_seconds: u64,
@@ -59,6 +63,7 @@ impl Config {
             hostname: "test-host".to_string(),
             reported_address: None,
             poll_seconds: 5,
+            claim_code_refresh_seconds: 25 * 60,
             enrollment_rejected_retry_seconds: 24 * 60 * 60,
             docker_network: "craftpilot-servers".to_string(),
             allowed_images: Vec::new(),
@@ -120,6 +125,7 @@ impl Config {
             hostname: detect_hostname(),
             reported_address: detect_host_address(),
             poll_seconds,
+            claim_code_refresh_seconds: 25 * 60,
             enrollment_rejected_retry_seconds: 24 * 60 * 60,
             docker_network,
             allowed_images: parse_image_list("CRAFTPILOT_ALLOWED_IMAGES", DEFAULT_ALLOWED_IMAGES),
