@@ -129,11 +129,16 @@ public sealed class AgentSetupService
             if (status.Installed)
             {
                 var logs = await GetComposeLogsAsync(ct);
-                var completed = logs.Contains("enrollment completed", StringComparison.OrdinalIgnoreCase);
+                // En kod som skrivits ut efter en tidigare anslutning betyder att
+                // noden tagits bort och agenten anmält sig igen. Då är det den
+                // nya koden som gäller, inte den gamla "enrollment completed".
+                var pendingCode = ClaimCodeParser.ExtractPending(logs);
+                var completed = pendingCode is null
+                    && logs.Contains(ClaimCodeParser.CompletedMarker, StringComparison.OrdinalIgnoreCase);
                 status = CopyStatus(
                     status,
                     enrollmentCompleted: completed,
-                    claimCode: completed ? null : ClaimCodeParser.Extract(logs));
+                    claimCode: pendingCode);
             }
 
             // Agentens servercontainrar bär labeln craftpilot.managed. Panelen
