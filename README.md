@@ -22,6 +22,8 @@ the Python agent — no master changes are required to run it side by side.
 
 - Self-enrollment: files a request, polls until a sysadmin approves it under
   **Ops & log → Runtime nodes**, stores the credential and completes the request.
+  The claim code lives 30 minutes on the master, so a request that keeps waiting
+  renews it every 25 minutes (terminal and `identity.conf` show the fresh code).
 - Replacement enrollment when the master rejects the credential (node deleted/disabled) — also on
   startup, so a restart after the node was removed always ends with a fresh claim code — and a fresh
   request when a pending/expired enrollment is no longer known to the master. A request a sysadmin

@@ -17,6 +17,8 @@ use url::Url;
 pub const NEW_REQUEST_ID: &str = "new-enrollment-request";
 const NEW_REQUEST_SECRET: &str = "new-enrollment-secret";
 pub const NEW_CLAIM_CODE: &str = "CP-NEW01-ABCDE";
+/// Koden en förnyelse får, så testet kan se att identity.conf uppdateras.
+pub const REFRESHED_CLAIM_CODE: &str = "CP-RENEW-2FGHJ";
 pub const NEW_CREDENTIAL: &str = "credential-from-the-new-node";
 
 /// Vad ett nytt ärende får för svar på sin första poll. `Approved` låter
@@ -197,6 +199,16 @@ fn response(
                 "200 OK",
                 json!({
                     "claim_code": NEW_CLAIM_CODE,
+                    "claim_expires_at": "2026-11-17T20:00:00+00:00",
+                })
+                .to_string(),
+            ),
+            // Ett ärende mastern känner igen får en ny kod; ett sparat ärende
+            // som mastern glömt svarar 401 som förut.
+            PollOutcome::Pending if path.contains(NEW_REQUEST_ID) => (
+                "200 OK",
+                json!({
+                    "claim_code": REFRESHED_CLAIM_CODE,
                     "claim_expires_at": "2026-11-17T20:00:00+00:00",
                 })
                 .to_string(),

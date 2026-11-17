@@ -257,6 +257,22 @@ impl Agent {
         Ok(())
     }
 
+    /// Förnyar claim-koden hos mastern och skriver ut den nya koden i
+    /// terminalen och identity.conf. Mastern sparar den nya koden, så
+    /// sysadminens inkorg visar samma kod som noden.
+    async fn renew_claim_code(&mut self, enrollment: &crate::state::Enrollment) -> Result<()> {
+        let refreshed = self
+            .api
+            .refresh_claim_code(&enrollment.request_id, &enrollment.request_secret)
+            .await?;
+        self.announce_claim_code(
+            &refreshed.claim_code,
+            &enrollment.request_id,
+            refreshed.claim_expires_at.as_deref().unwrap_or(""),
+        )
+        .await
+    }
+
     async fn self_enroll(&mut self) -> Result<()> {
         // En avvisad anmälan får inte bli en ny förfrågan varje poll: inkorgen
         // ska inte fyllas med dubbletter medan sysadminen redan sagt nej.
@@ -272,20 +288,8 @@ impl Agent {
             Some(saved) => {
                 // Ny start med ett sparat ärende: förnya koden så den som
                 // ligger i terminalen/identity.conf alltid är giltig.
-                match self
-                    .api
-                    .refresh_claim_code(&saved.request_id, &saved.request_secret)
-                    .await
-                {
-                    Ok(refreshed) => {
-                        self.announce_claim_code(
-                            &refreshed.claim_code,
-                            &saved.request_id,
-                            refreshed.claim_expires_at.as_deref().unwrap_or(""),
-                        )
-                        .await?;
-                        saved
-                    }
+                match self.renew_claim_code(&saved).await {
+                    Ok(()) => saved,
                     // Ärendet finns inte längre hos mastern: avvisat, utgånget
                     // eller redan förbrukat. Ett request-secret som mastern inte
                     // känner igen svarar 401, så det kan aldrig bli `invalid` i
@@ -320,6 +324,9 @@ impl Agent {
             }
             None => self.create_enrollment().await?,
         };
+        // När den aktuella koden utfärdades. Masterns TTL är 30 min, så
+        // koden förnyas en stund innan den går ut.
+        let mut code_issued_at = Instant::now();
 
         loop {
             let poll = match self
@@ -337,6 +344,7 @@ impl Agent {
                         "the enrollment request is unknown to the master — filing a new one"
                     );
                     enrollment = self.create_enrollment().await?;
+                    code_issued_at = Instant::now();
                     continue;
                 }
                 Err(err) => return Err(err),
@@ -376,7 +384,41 @@ impl Agent {
                     info!(node_id = %node_id, "enrollment completed");
                     return Ok(());
                 }
-                "pending" => sleep(Duration::from_secs(15)).await,
+                "pending" => {
+                    // En anmälan kan ligga kvar i timmar. Koden går ut efter
+                    // 30 min, så agenten förnyar den i tid — annars står
+                    // ägaren utan giltig kod och måste starta om agenten.
+                    if code_issued_at.elapsed()
+                        >= Duration::from_secs(self.cfg.claim_code_refresh_seconds)
+                    {
+                        match self.renew_claim_code(&enrollment).await {
+                            Ok(()) => code_issued_at = Instant::now(),
+                            // En avvisning eller ett borta ärende hanteras som
+                            // i starten: avvisning stänger, borta ärende fil:as
+                            // på nytt.
+                            Err(AgentError::EnrollmentRejected) => {
+                                warn!(
+                                    request_id = %enrollment.request_id,
+                                    "the sysadmin rejected the enrollment request — not filing another one"
+                                );
+                                self.record_enrollment_rejection()?;
+                                return Err(AgentError::EnrollmentRejected);
+                            }
+                            Err(err) if needs_new_credential(&err) => {
+                                warn!(
+                                    request_id = %enrollment.request_id,
+                                    "the enrollment request is unknown to the master — filing a new one"
+                                );
+                                enrollment = self.create_enrollment().await?;
+                                code_issued_at = Instant::now();
+                            }
+                            Err(err) => {
+                                warn!(error = %err, "could not renew the claim code; trying again on the next poll");
+                            }
+                        }
+                    }
+                    sleep(Duration::from_secs(15)).await;
+                }
                 "rejected" => {
                     warn!(
                         request_id = %enrollment.request_id,
@@ -395,6 +437,7 @@ impl Agent {
                         "the enrollment request is gone — filing a new one"
                     );
                     enrollment = self.create_enrollment().await?;
+                    code_issued_at = Instant::now();
                 }
                 other => {
                     return Err(AgentError::Config(format!(
@@ -1261,7 +1304,9 @@ mod tests {
     use crate::config::Config;
     use crate::error::AgentError;
     use crate::state::{Enrollment, StateStore};
-    use crate::test_master::{FakeMaster, NEW_CLAIM_CODE, NEW_CREDENTIAL, NEW_REQUEST_ID};
+    use crate::test_master::{
+        FakeMaster, NEW_CLAIM_CODE, NEW_CREDENTIAL, NEW_REQUEST_ID, REFRESHED_CLAIM_CODE,
+    };
 
     /// En nod som tagits bort i panelen svarar 401 på nästa heartbeat. Det ska
     /// leda till en ny enrollment — inte till att agenten dör med den sparade
@@ -1416,6 +1461,45 @@ mod tests {
         }
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Claim-koden lever 30 min hos mastern. En anmälan som väntar längre ska
+    /// få en ny kod automatiskt i stället för att stå utan giltig kod tills
+    /// agenten startas om.
+    #[tokio::test]
+    async fn a_long_waiting_enrollment_renews_its_claim_code() {
+        let master = FakeMaster::start_waiting().await;
+        let state_dir = temp_state_dir("renew-claim-code");
+        let mut cfg = Config::for_test(master.url(), state_dir.clone());
+        // Kortare än masterns TTL, så testet inte behöver vänta en halvtimme.
+        cfg.claim_code_refresh_seconds = 0;
+        let mut agent = Agent::new(cfg).unwrap();
+
+        let waiting =
+            tokio::time::timeout(std::time::Duration::from_secs(2), agent.self_enroll()).await;
+        assert!(waiting.is_err(), "agenten väntar på en ägare");
+
+        let requests = master.requests();
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|request| request.path == "/api/runtime/enrollments")
+                .count(),
+            1,
+            "bara en anmälan: {requests:?}"
+        );
+        assert!(
+            requests
+                .iter()
+                .any(|request| request.path.contains(NEW_REQUEST_ID)
+                    && request.path.ends_with("/claim-code")),
+            "koden ska ha förnyats: {requests:?}"
+        );
+        let identity = std::fs::read_to_string(state_dir.join("identity.conf")).unwrap();
+        assert!(
+            identity.contains(REFRESHED_CLAIM_CODE),
+            "den förnyade koden ska ligga i identity.conf: {identity}"
+        );
     }
 
     /// En sysadmin som avvisar anmälan ska stänga dörren, inte öppna en ny:
