@@ -12,6 +12,8 @@ mod rcon;
 mod snapshot;
 mod state;
 mod telemetry;
+#[cfg(test)]
+mod test_master;
 
 use tracing::error;
 use tracing_subscriber::EnvFilter;

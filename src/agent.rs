@@ -198,6 +198,35 @@ impl Agent {
         Ok(())
     }
 
+    /// Fil:ar en ny anmälan, sparar ärendet och skriver ut claim-koden.
+    async fn create_enrollment(&mut self) -> Result<crate::state::Enrollment> {
+        let created = self
+            .api
+            .create_enrollment(
+                &self.cfg.hostname,
+                &self.cfg.agent_version,
+                self.cfg.reported_address.as_deref(),
+            )
+            .await?;
+        info!(
+            request_id = %created.request_id,
+            expires_at = %created.expires_at,
+            "filed an enrollment request — link it under My node in CraftPilot"
+        );
+        if let Some(code) = created.claim_code.clone() {
+            self.announce_claim_code(
+                &code,
+                &created.request_id,
+                created.claim_expires_at.as_deref().unwrap_or(""),
+            )
+            .await?;
+        }
+        let enrollment = created.into_enrollment();
+        self.store.state_mut().enrollment = Some(enrollment.clone());
+        self.store.save()?;
+        Ok(enrollment)
+    }
+
     async fn self_enroll(&mut self) -> Result<()> {
         let mut enrollment = match self.store.state().enrollment.clone() {
             Some(saved) => {
@@ -215,49 +244,53 @@ impl Agent {
                             refreshed.claim_expires_at.as_deref().unwrap_or(""),
                         )
                         .await?;
+                        saved
                     }
-                    Err(err) => warn!(
-                        error = %err,
-                        request_id = %saved.request_id,
-                        "could not refresh the claim code; keeping the saved enrollment"
-                    ),
+                    // Ärendet finns inte längre hos mastern: avvisat, utgånget
+                    // eller redan förbrukat. Ett request-secret som mastern inte
+                    // känner igen svarar 401, så det kan aldrig bli `invalid` i
+                    // poll-svaret. Släpp ärendet och fil:a ett nytt, annars står
+                    // agenten utan claim-kod för alltid.
+                    Err(err) if needs_new_credential(&err) => {
+                        warn!(
+                            request_id = %saved.request_id,
+                            "the saved enrollment request is gone — filing a new one"
+                        );
+                        self.create_enrollment().await?
+                    }
+                    Err(err) => {
+                        warn!(
+                            error = %err,
+                            request_id = %saved.request_id,
+                            "could not refresh the claim code; keeping the saved enrollment"
+                        );
+                        saved
+                    }
                 }
-                saved
             }
-            None => {
-                let created = self
-                    .api
-                    .create_enrollment(
-                        &self.cfg.hostname,
-                        &self.cfg.agent_version,
-                        self.cfg.reported_address.as_deref(),
-                    )
-                    .await?;
-                info!(
-                    request_id = %created.request_id,
-                    expires_at = %created.expires_at,
-                    "filed an enrollment request — link it under My node in CraftPilot"
-                );
-                if let Some(code) = created.claim_code.clone() {
-                    self.announce_claim_code(
-                        &code,
-                        &created.request_id,
-                        created.claim_expires_at.as_deref().unwrap_or(""),
-                    )
-                    .await?;
-                }
-                let enrollment = created.into_enrollment();
-                self.store.state_mut().enrollment = Some(enrollment.clone());
-                self.store.save()?;
-                enrollment
-            }
+            None => self.create_enrollment().await?,
         };
 
         loop {
-            let poll = self
+            let poll = match self
                 .api
                 .poll_enrollment(&enrollment.request_id, &enrollment.request_secret)
-                .await?;
+                .await
+            {
+                Ok(poll) => poll,
+                // Samma sak för poll: ett ärende mastern glömt bort (t.ex.
+                // städat efter 24 h) svarar 401. Då ska agenten fil:a ett nytt
+                // i stället för att dö med det gamla ärendet kvar på disk.
+                Err(err) if needs_new_credential(&err) => {
+                    warn!(
+                        request_id = %enrollment.request_id,
+                        "the enrollment request is unknown to the master — filing a new one"
+                    );
+                    enrollment = self.create_enrollment().await?;
+                    continue;
+                }
+                Err(err) => return Err(err),
+            };
 
             match poll.status.as_str() {
                 "approved" => {
@@ -303,36 +336,14 @@ impl Agent {
                 }
                 "expired" | "invalid" | "completed" => {
                     // Ett borta/gammalt ärende får aldrig retras för evigt
-                    // (Python-buggen `master_request_failed status=401`):
-                    // släpp det sparade ärendet och fil:a ett nytt.
+                    // (Python-buggen `master_request_failed status=401`): fil:a
+                    // ett nytt ärende i stället.
                     warn!(
                         request_id = %enrollment.request_id,
                         status = %poll.status,
                         "the enrollment request is gone — filing a new one"
                     );
-                    self.store.state_mut().enrollment = None;
-                    self.store.save()?;
-
-                    let created = self
-                        .api
-                        .create_enrollment(
-                            &self.cfg.hostname,
-                            &self.cfg.agent_version,
-                            self.cfg.reported_address.as_deref(),
-                        )
-                        .await?;
-                    info!(request_id = %created.request_id, "filed a replacement enrollment request");
-                    if let Some(code) = created.claim_code.clone() {
-                        self.announce_claim_code(
-                            &code,
-                            &created.request_id,
-                            created.claim_expires_at.as_deref().unwrap_or(""),
-                        )
-                        .await?;
-                    }
-                    enrollment = created.into_enrollment();
-                    self.store.state_mut().enrollment = Some(enrollment.clone());
-                    self.store.save()?;
+                    enrollment = self.create_enrollment().await?;
                 }
                 other => {
                     return Err(AgentError::Config(format!(
@@ -1178,8 +1189,13 @@ fn deletable_server_data(root: &Path, server_id: &str) -> Result<Option<PathBuf>
 
 #[cfg(test)]
 mod tests {
-    use super::{deletable_server_data, needs_new_credential, sha256_hex};
+    use std::path::PathBuf;
+
+    use super::{deletable_server_data, needs_new_credential, sha256_hex, Agent};
+    use crate::config::Config;
     use crate::error::AgentError;
+    use crate::state::{Enrollment, StateStore};
+    use crate::test_master::{FakeMaster, NEW_CLAIM_CODE, NEW_CREDENTIAL, NEW_REQUEST_ID};
 
     /// En nod som tagits bort i panelen svarar 401 på nästa heartbeat. Det ska
     /// leda till en ny enrollment — inte till att agenten dör med den sparade
@@ -1194,6 +1210,112 @@ mod tests {
             status: 500,
             body: "boom".to_string()
         }));
+    }
+
+    /// En temporär state-katalog per test, så testerna aldrig delar
+    /// credential eller identity.conf med varandra.
+    fn temp_state_dir(label: &str) -> PathBuf {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|elapsed| elapsed.as_nanos())
+            .unwrap_or_default();
+        let dir = std::env::temp_dir().join(format!(
+            "craftpilot-enroll-{label}-{}-{unique}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// Noden togs bort i panelen medan agenten var stoppad. Första starten får
+    /// 401 på sin sparade credential och ska då själv fil:a en ny anmälan och
+    /// skriva ut en ny claim-kod — ingen behöver trycka på "Installera /
+    /// Starta" och inget gammalt ärende ligger kvar.
+    #[tokio::test]
+    async fn a_restart_after_the_node_was_deleted_files_a_new_claim_code() {
+        let master = FakeMaster::start().await;
+        let state_dir = temp_state_dir("restart-after-delete");
+        {
+            let mut store = StateStore::open(&state_dir).unwrap();
+            store.state_mut().node_id = Some("3d2529cc-26bb-4601-bf21-364e4ce6ee0a".to_string());
+            store.state_mut().credential = Some("revoked-credential".to_string());
+            store.save().unwrap();
+        }
+
+        let mut agent = Agent::new(Config::for_test(master.url(), state_dir.clone())).unwrap();
+        agent.start_session().await.unwrap();
+
+        let requests = master.requests();
+        assert!(requests
+            .iter()
+            .any(|request| request.method == "POST" && request.path.ends_with("/heartbeat")));
+        assert!(requests
+            .iter()
+            .any(|request| request.method == "POST" && request.path == "/api/runtime/enrollments"));
+
+        let store = StateStore::open(&state_dir).unwrap();
+        assert_eq!(store.state().credential.as_deref(), Some(NEW_CREDENTIAL));
+        assert!(store.state().enrollment.is_none());
+        // Koden skrevs ut när ärendet fil:ades och togs bort när anslutningen
+        // slutfördes: agenten är tillbaka utan att någon klickade på panelen.
+        assert!(!state_dir.join("identity.conf").exists());
+    }
+
+    /// Ett sparat ärende som mastern inte längre känner igen (avvisat eller
+    /// utgånget) svarar 401 på både claim-code och poll. Det får inte stoppa
+    /// agenten: ärendet släpps och ett nytt fil:as, annars finns ingen kod att
+    /// koppla med — och uppstarten dör i en loop.
+    #[tokio::test]
+    async fn a_stale_saved_enrollment_is_replaced_by_a_new_claim_code() {
+        let master = FakeMaster::start_waiting().await;
+        let state_dir = temp_state_dir("stale-enrollment");
+        {
+            let mut store = StateStore::open(&state_dir).unwrap();
+            store.state_mut().enrollment = Some(Enrollment {
+                request_id: "forgotten-request".to_string(),
+                request_secret: "forgotten-secret".to_string(),
+            });
+            store.save().unwrap();
+        }
+
+        let mut agent = Agent::new(Config::for_test(master.url(), state_dir.clone())).unwrap();
+        // Mastern väntar på en ägare, så agenten stannar i poll-loopen: det är
+        // läget där den nya koden ska ligga i identity.conf utan att någon har
+        // klickat i panelen.
+        let waiting =
+            tokio::time::timeout(std::time::Duration::from_secs(2), agent.self_enroll()).await;
+        assert!(
+            waiting.is_err(),
+            "agenten ska vänta på en claim, inte avsluta"
+        );
+
+        let identity = std::fs::read_to_string(state_dir.join("identity.conf")).unwrap();
+        assert!(identity.contains(NEW_CLAIM_CODE), "{identity}");
+        let requests = master.requests();
+        assert!(requests
+            .iter()
+            .any(|request| request.path.ends_with("/claim-code")));
+        assert!(!requests.iter().any(|request| {
+            request.path.contains("forgotten-request") && request.path.ends_with("/poll")
+        }));
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|request| request.path == "/api/runtime/enrollments")
+                .count(),
+            1
+        );
+
+        let store = StateStore::open(&state_dir).unwrap();
+        assert!(store.state().credential.is_none());
+        assert_eq!(
+            store
+                .state()
+                .enrollment
+                .as_ref()
+                .map(|saved| saved.request_id.as_str()),
+            Some(NEW_REQUEST_ID)
+        );
     }
 
     /// `delete_server` får bara röra serverns egen katalog: en saknad katalog
