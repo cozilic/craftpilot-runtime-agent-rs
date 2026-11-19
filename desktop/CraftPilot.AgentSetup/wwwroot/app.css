@@ -157,16 +157,23 @@ button {
   color: var(--warn);
 }
 
-.hero {
+.overview-head {
   display: flex;
   align-items: flex-end;
   justify-content: space-between;
   gap: 36px;
-  padding: 8px 0 34px;
+  padding: 8px 0 22px;
 }
 
-.hero-copy {
+.overview-copy {
   max-width: 660px;
+}
+
+.overview-head h1 {
+  margin-bottom: 6px;
+  font-size: clamp(26px, 3.4vw, 36px);
+  line-height: 1.08;
+  letter-spacing: -0.03em;
 }
 
 .eyebrow {
@@ -286,6 +293,51 @@ h1 span {
 .button-icon {
   font-size: 16px;
   line-height: 1;
+}
+
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.stat-card {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  padding: 13px 15px 14px;
+  border: 1px solid var(--border-soft);
+  border-radius: 14px;
+  background: linear-gradient(160deg, rgba(20, 31, 38, 0.9), rgba(12, 19, 24, 0.9));
+}
+
+.stat-label {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+}
+
+.stat-value {
+  overflow: hidden;
+  margin: 4px 0 3px;
+  font-size: 19px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stat-hint {
+  overflow: hidden;
+  color: var(--faint);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .status-grid {
@@ -746,10 +798,14 @@ h1 span {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .hero {
+  .overview-head {
     align-items: flex-start;
     flex-direction: column;
     gap: 22px;
+  }
+
+  .stats-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .hero-actions {
@@ -772,6 +828,7 @@ h1 span {
   }
 
   .status-grid,
+  .stats-grid,
   .form-grid {
     grid-template-columns: 1fr;
   }

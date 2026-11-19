@@ -134,6 +134,12 @@ impl Agent {
         ) {
             self.api.set_credential(Some(credential));
             info!(node_id = %node_id, "using the saved node credential");
+            // Desktop-panelen läser namnet ur loggen: det skrivs ut vid varje
+            // start så en panel som startas om inte behöver vänta på nästa
+            // claim för att visa vilken nod agenten är.
+            if let Some(name) = self.store.state().node_name.clone() {
+                info!(node_name = %name, "node name");
+            }
             return Ok(());
         }
 
@@ -481,6 +487,20 @@ impl Agent {
         }
     }
 
+    /// Sparar nodens namn när mastern rapporterar ett nytt. Loggar bara vid
+    /// ändring, så loggen inte fylls av samma rad var femte sekund.
+    fn remember_node_name(&mut self, name: &str) -> Result<()> {
+        let name = name.trim();
+        if name.is_empty() || self.store.state().node_name.as_deref() == Some(name) {
+            return Ok(());
+        }
+
+        self.store.state_mut().node_name = Some(name.to_string());
+        self.store.save()?;
+        info!(node_name = %name, "node name");
+        Ok(())
+    }
+
     /// Agentprocessens drifttid. Skickas med heartbeat/claim så ägarvyn kan
     /// visa hur länge noden varit igång sedan senaste omstart.
     fn uptime_seconds(&self) -> u64 {
@@ -499,6 +519,13 @@ impl Agent {
             .api
             .claim(&node_id, sequence, self.uptime_seconds())
             .await?;
+
+        // Nodens namn kommer med varje claim (node_settings) — spara det när
+        // det ändrats. Panelen godkänner namnbyten, så agenten får det nya
+        // namnet i nästa svar utan att startas om.
+        if let Some(settings) = claim.node_settings.as_ref() {
+            self.remember_node_name(&settings.name)?;
+        }
 
         // Telemetrin hör inte till kommandokön: den måste skickas även när
         // claim är tomt, annars stannar panelens status så snart inget körs.

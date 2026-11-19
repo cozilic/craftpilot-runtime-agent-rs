@@ -14,6 +14,13 @@ use crate::error::{AgentError, Result};
 pub struct AgentState {
     #[serde(default)]
     pub node_id: Option<String>,
+    /// Nodens namn i panelen. Mastern skickar det i claim-svaret
+    /// (`node_settings.name`); agenten sparar det så desktop-panelen kan visa
+    /// vilken nod den här agenten är — annars går flera agenter inte att
+    /// skilja åt när en av dem är nere. Namnet är inte hemligt (det står i
+    /// panelen), men det skrivs bara till den privata state-filen.
+    #[serde(default)]
+    pub node_name: Option<String>,
     #[serde(default)]
     pub credential: Option<String>,
     #[serde(default)]
@@ -216,6 +223,31 @@ mod tests {
         assert_eq!(reloaded.state().credential.as_deref(), Some("credential"));
 
         fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn node_name_round_trips_and_keeps_old_state_files_valid() {
+        let dir = temporary_dir("node-name");
+        let mut store = StateStore::open(&dir).unwrap();
+        store.state_mut().node_name = Some("silksong".into());
+        store.save().unwrap();
+
+        let reloaded = StateStore::open(&dir).unwrap();
+        assert_eq!(reloaded.state().node_name.as_deref(), Some("silksong"));
+
+        // En state-fil från före fältet får inte bli oläsbar.
+        let legacy = temporary_dir("legacy-node-name");
+        fs::create_dir_all(&legacy).unwrap();
+        fs::write(
+            legacy.join("state.json"),
+            br#"{"node_id":"node-1","credential":"credential"}"#,
+        )
+        .unwrap();
+        let opened = StateStore::open(&legacy).unwrap();
+        assert_eq!(opened.state().node_name, None);
+
+        fs::remove_dir_all(&dir).unwrap();
+        fs::remove_dir_all(&legacy).unwrap();
     }
 
     #[test]

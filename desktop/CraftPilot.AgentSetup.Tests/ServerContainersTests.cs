@@ -64,6 +64,68 @@ public sealed class ServerContainersTests
     }
 
     [Fact]
+    public void Parse_reads_the_published_host_port_for_player_pings()
+    {
+        var servers = ServerContainers.Parse(
+            "craftpilot-096d46aa|096d46aa-1111-2222-3333-444455556666|running|img|" +
+            "0.0.0.0:25565->25565/tcp, [::]:25565->25565/tcp\r\n" +
+            "craftpilot-134eb9b3|134eb9b3-314F-4454-B53E-24097E0F1A07|exited|img|\r\n");
+
+        Assert.Equal(25565, servers[0].HostPort);
+        Assert.Null(servers[1].HostPort);
+    }
+
+    [Fact]
+    public void WithServerDirectories_lists_servers_that_have_not_started_yet()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"craftpilot-servers-{Guid.NewGuid():N}");
+        var started = "096d46aa-1111-2222-3333-444455556666";
+        var waiting = "f24fdcd7-1111-2222-3333-444455556666";
+        Directory.CreateDirectory(Path.Combine(root, started));
+        Directory.CreateDirectory(Path.Combine(root, waiting));
+        Directory.CreateDirectory(Path.Combine(root, "inte-ett-server-id"));
+
+        try
+        {
+            var container = new ServerContainer(
+                "craftpilot-096d46aa",
+                started,
+                "exited",
+                "img",
+                25565);
+
+            var merged = ServerContainers.WithServerDirectories([container], root);
+
+            Assert.Equal(2, merged.Count);
+            var absent = Assert.Single(merged, server => server.State == "absent");
+            Assert.Equal(waiting, absent.ServerId);
+            Assert.Equal("Inte startad", absent.StateLabel);
+            Assert.True(absent.WaitingForFirstStart);
+            Assert.DoesNotContain(merged, server => server.ServerId == "inte-ett-server-id");
+            Assert.Single(merged, server => server.ServerId == started);
+            Assert.DoesNotContain(ServerContainers.Stopped(merged), server => server.WaitingForFirstStart);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void WithServerDirectories_tolerates_a_missing_data_directory()
+    {
+        var missing = Path.Combine(Path.GetTempPath(), $"craftpilot-missing-{Guid.NewGuid():N}");
+        var servers = ServerContainers.Parse(Sample);
+
+        Assert.Equal(
+            servers.Select(server => server.ServerId),
+            ServerContainers.WithServerDirectories(servers, missing).Select(server => server.ServerId));
+        Assert.Equal(
+            servers.Select(server => server.ServerId),
+            ServerContainers.WithServerDirectories(servers, null).Select(server => server.ServerId));
+    }
+
+    [Fact]
     public void Parse_returns_empty_for_empty_output()
     {
         Assert.Empty(ServerContainers.Parse(null));
