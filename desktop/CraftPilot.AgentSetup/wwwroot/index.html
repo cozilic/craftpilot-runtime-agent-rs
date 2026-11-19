@@ -56,9 +56,8 @@
       <section class="tab-panel" id="tab-main" role="tabpanel" aria-labelledby="tab-button-main">
         <section class="overview-head">
           <div class="overview-copy">
-            <p class="eyebrow">Översikt</p>
             <h1 id="node-title">Den här noden</h1>
-            <p class="lede" id="node-subtitle">Docker, mastern och agenten – och servrarna på den här datorn.</p>
+            <p class="hero-meta" id="node-meta">—</p>
           </div>
           <div class="hero-actions">
             <button class="button button-quiet" id="refresh" type="button">
@@ -75,27 +74,32 @@
           <article class="stat-card">
             <span class="stat-label">Servrar</span>
             <strong class="stat-value" id="stat-servers">0/0</strong>
-            <span class="stat-hint" id="stat-servers-hint">Inga servrar ännu</span>
+            <span class="stat-hint" id="stat-servers-hint">—</span>
           </article>
           <article class="stat-card">
             <span class="stat-label">Spelare</span>
             <strong class="stat-value" id="stat-players">—</strong>
-            <span class="stat-hint" id="stat-players-hint">Inga servrar igång</span>
+            <span class="stat-hint" id="stat-players-hint">—</span>
           </article>
           <article class="stat-card">
             <span class="stat-label">Minne</span>
             <strong class="stat-value" id="stat-memory">—</strong>
-            <span class="stat-hint" id="stat-memory-hint">RAM på datorn</span>
+            <span class="stat-hint" id="stat-memory-hint">—</span>
           </article>
           <article class="stat-card">
             <span class="stat-label">Disk</span>
             <strong class="stat-value" id="stat-disk">—</strong>
-            <span class="stat-hint" id="stat-disk-hint">Serverdata-disken</span>
+            <span class="stat-hint" id="stat-disk-hint">—</span>
           </article>
           <article class="stat-card">
             <span class="stat-label">Nätverk</span>
             <strong class="stat-value" id="stat-network">—</strong>
-            <span class="stat-hint" id="stat-network-hint">Ingen mätning ännu</span>
+            <span class="stat-hint" id="stat-network-hint">—</span>
+          </article>
+          <article class="stat-card">
+            <span class="stat-label">Panel</span>
+            <strong class="stat-value" id="stat-panel">v…</strong>
+            <span class="stat-hint" id="stat-panel-hint">Kontrollerar</span>
           </article>
         </section>
 
@@ -132,8 +136,7 @@
               <span class="card-label">Docker</span>
               <span class="badge badge-idle" id="docker-badge">Kontrollerar</span>
             </div>
-            <h2 id="docker-title">Docker Desktop</h2>
-            <p id="docker-detail">Letar efter Docker-motorn…</p>
+            <p class="card-value" id="docker-value">Kontrollerar…</p>
             <a class="card-link" id="docker-link" href="https://www.docker.com/products/docker-desktop/" target="_blank" rel="noopener" hidden>
               Hämta Docker Desktop <span aria-hidden="true">↗</span>
             </a>
@@ -145,8 +148,7 @@
               <span class="card-label">Master</span>
               <span class="badge badge-idle" id="master-badge">Kontrollerar</span>
             </div>
-            <h2 id="master-title">Master-host</h2>
-            <p id="master-detail">Ansluter till masters hälsokontroll…</p>
+            <p class="card-value" id="master-value">Kontrollerar…</p>
             <a class="card-link" id="master-link" href="https://craftpilot.se/node" target="_blank" rel="noopener">
               Öppna Min nod <span aria-hidden="true">↗</span>
             </a>
@@ -158,8 +160,7 @@
               <span class="card-label">Agent</span>
               <span class="badge badge-idle" id="agent-badge">Kontrollerar</span>
             </div>
-            <h2 id="agent-title">Runtime Agent</h2>
-            <p id="agent-detail">Letar efter agentcontainern…</p>
+            <p class="card-value" id="agent-value">Kontrollerar…</p>
           </article>
 
           <article class="status-card status-card-claim" id="claim-card">
@@ -168,8 +169,7 @@
               <span class="card-label">Anslutning</span>
               <span class="badge badge-idle" id="claim-badge">Väntar</span>
             </div>
-            <h2 id="claim-title">Claim-kod</h2>
-            <p id="claim-detail">Koden visas när agenten har startat.</p>
+            <p class="card-value" id="claim-value">Väntar</p>
             <div class="claim-row">
               <code id="claim-code">—</code>
               <button class="copy-button" id="copy-claim" type="button" disabled>Kopiera</button>
@@ -188,10 +188,7 @@
               <span class="badge badge-idle" id="servers-count">0</span>
             </div>
           </div>
-          <p class="server-empty" id="servers-empty">
-            Här listas de servrar som agenten kör på den här datorn. Skapa en server i panelen på
-            craftpilot.se – så dyker den upp här med status.
-          </p>
+          <p class="server-empty" id="servers-empty">Inga servrar ännu.</p>
           <ul class="server-list" id="servers-list" hidden></ul>
         </section>
       </section>

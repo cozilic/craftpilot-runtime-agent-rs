@@ -31,11 +31,20 @@ function setBadge(id, text, kind) {
   badge.className = `badge badge-${kind}`;
 }
 
-function setCard(cardId, dotId, badgeId, titleId, detailId, kind, badge, title, detail) {
+function setCard(cardId, dotId, badgeId, valueId, kind, badge, value, title) {
   setDot(dotId, kind);
   setBadge(badgeId, badge, kind);
-  $(titleId).textContent = title;
-  $(detailId).textContent = detail;
+
+  // Kortet har etikett, badge och ett värde — ingen löptext. Hela felet
+  // ligger i title när värdet är en förkortad rad.
+  const node = $(valueId);
+  node.textContent = value;
+  if (title) {
+    node.title = title;
+  } else {
+    node.removeAttribute('title');
+  }
+
   $(cardId).dataset.status = kind;
 }
 
@@ -45,6 +54,13 @@ function versionLabel(value) {
   }
 
   return /^v/i.test(value) ? value : `v${value}`;
+}
+
+// Agentimagen är lång (ghcr.io/…:0.9); översikten visar taggen i stället.
+function imageTag(image) {
+  const value = (image || '').split('@')[0];
+  const colon = value.lastIndexOf(':');
+  return colon > value.lastIndexOf('/') ? value.slice(colon + 1) : '';
 }
 
 function renderVersion(check) {
@@ -58,6 +74,15 @@ function renderVersion(check) {
   pill.title = check.error
     ? `Panelversion ${current}. ${check.error}`
     : `Panelversion ${current}`;
+
+  // Panelen har en egen siffra i översikten: versionen och om en nyare finns.
+  const panelStat = $('stat-panel');
+  if (panelStat) {
+    panelStat.textContent = current;
+    $('stat-panel-hint').textContent = check.updateAvailable && check.latestVersion
+      ? `Ny ${versionLabel(check.latestVersion)} finns`
+      : (check.error ? 'Kunde inte kontrolleras' : 'Senaste versionen');
+  }
 
   if (check.updateAvailable && check.latestVersion && check.releaseUrl) {
     banner.hidden = false;
@@ -121,10 +146,10 @@ function renderOverview(status) {
   const host = (status.hostName || '').trim();
   const name = (status.nodeName || host || 'Den här noden').trim();
 
+  // Nodens namn i panelen är rubriken; maskinen står kvar på raden under så
+  // två agenter på olika datorer går att skilja åt.
   $('node-title').textContent = name;
-  $('node-subtitle').textContent = status.nodeName
-    ? `Nodnamn i panelen · maskin ${host || 'okänd'}`
-    : `Maskin ${host || 'okänd'}`;
+  $('node-meta').textContent = host ? `Maskin ${host}` : '—';
 
   const total = stats.serversTotal ?? 0;
   const running = stats.serversRunning ?? 0;
@@ -217,33 +242,28 @@ function renderStatus(status) {
 
   if (state.dockerReady) {
     setCard(
-      'docker-card', 'docker-dot', 'docker-badge', 'docker-title', 'docker-detail',
+      'docker-card', 'docker-dot', 'docker-badge', 'docker-value',
       'ok', 'Redo',
-      'Docker är redo',
-      `Server ${status.dockerVersion || 'tillgänglig'}`
+      status.dockerVersion ? `Server ${status.dockerVersion}` : 'Svarar'
     );
   } else if (dockerState === 'not-installed') {
     setCard(
-      'docker-card', 'docker-dot', 'docker-badge', 'docker-title', 'docker-detail',
+      'docker-card', 'docker-dot', 'docker-badge', 'docker-value',
       'warn', 'Saknas',
-      status.dockerDesktopInstalled ? 'Docker-kommandot saknas' : 'Docker Desktop saknas',
-      status.dockerDesktopInstalled
-        ? 'Docker Desktop finns men kommandot docker hittades inte. Starta om Docker Desktop och panelen.'
-        : 'Installera Docker Desktop med Linux-containrar för att kunna installera agenten.'
+      status.dockerDesktopInstalled ? 'Kommandot docker saknas' : 'Inte installerat'
     );
   } else if (dockerState === 'not-running') {
     setCard(
-      'docker-card', 'docker-dot', 'docker-badge', 'docker-title', 'docker-detail',
+      'docker-card', 'docker-dot', 'docker-badge', 'docker-value',
       'warn', 'Stoppad',
-      'Docker Desktop är inte igång',
-      'Starta Docker Desktop och vänta tills motorn är redo.'
+      'Motorn kör inte'
     );
   } else {
     setCard(
-      'docker-card', 'docker-dot', 'docker-badge', 'docker-title', 'docker-detail',
+      'docker-card', 'docker-dot', 'docker-badge', 'docker-value',
       'bad', 'Fel',
-      'Docker svarar inte',
-      shortError(status.dockerError)
+      shortError(status.dockerError),
+      status.dockerError ?? ''
     );
   }
 
@@ -253,92 +273,84 @@ function renderStatus(status) {
     const latency = status.masterLatencyMs != null ? ` · ${status.masterLatencyMs} ms` : '';
     const version = status.masterVersion
       ? (/^v/i.test(status.masterVersion) ? status.masterVersion : `v${status.masterVersion}`)
-      : 'Hälsokontroll OK';
+      : 'Svarar';
     setCard(
-      'master-card', 'master-dot', 'master-badge', 'master-title', 'master-detail',
+      'master-card', 'master-dot', 'master-badge', 'master-value',
       'ok', 'Online',
-      'Mastern nås',
       `${version}${latency}`
     );
   } else {
     setCard(
-      'master-card', 'master-dot', 'master-badge', 'master-title', 'master-detail',
+      'master-card', 'master-dot', 'master-badge', 'master-value',
       'bad', 'Fel',
-      'Mastern svarar inte',
-      shortError(status.masterError)
+      shortError(status.masterError),
+      status.masterError ?? ''
     );
   }
 
+  const tag = imageTag(status.agentImage);
   if (!state.dockerReady) {
     setCard(
-      'agent-card', 'agent-dot', 'agent-badge', 'agent-title', 'agent-detail',
+      'agent-card', 'agent-dot', 'agent-badge', 'agent-value',
       'idle', 'Väntar',
-      'Kan inte kontrollera agenten',
-      'Docker måste vara igång innan agenten kan kontrolleras.'
+      'Docker är inte igång'
     );
   } else if (status.agentRunning) {
     setCard(
-      'agent-card', 'agent-dot', 'agent-badge', 'agent-title', 'agent-detail',
+      'agent-card', 'agent-dot', 'agent-badge', 'agent-value',
       'ok', 'Körs',
-      'Agenten är igång',
-      status.agentImage || 'Containern körs.'
+      tag ? versionLabel(tag) : '—',
+      status.agentImage ?? ''
     );
   } else if (status.installed) {
     setCard(
-      'agent-card', 'agent-dot', 'agent-badge', 'agent-title', 'agent-detail',
+      'agent-card', 'agent-dot', 'agent-badge', 'agent-value',
       'warn', 'Stoppad',
-      'Agenten är stoppad',
-      'Containern finns men körs inte just nu.'
+      'Containern kör inte'
     );
   } else if (status.agentExists) {
     setCard(
-      'agent-card', 'agent-dot', 'agent-badge', 'agent-title', 'agent-detail',
+      'agent-card', 'agent-dot', 'agent-badge', 'agent-value',
       'warn', 'Hittad',
-      'Agentcontainern finns redan',
-      'Panelen saknar installationsfilerna. Klicka på Installera / starta för att ta över den, eller Ta bort.'
+      'Saknar installationsfiler'
     );
   } else {
     setCard(
-      'agent-card', 'agent-dot', 'agent-badge', 'agent-title', 'agent-detail',
+      'agent-card', 'agent-dot', 'agent-badge', 'agent-value',
       'idle', 'Saknas',
-      'Ingen agent installerad',
-      'Välj serverdata och klicka på Installera / starta.'
+      'Inte installerad'
     );
   }
 
   if (!state.dockerReady) {
     setCard(
-      'claim-card', 'claim-dot', 'claim-badge', 'claim-title', 'claim-detail',
+      'claim-card', 'claim-dot', 'claim-badge', 'claim-value',
       'idle', 'Väntar',
-      'Claim-kod',
-      'Koden visas när Docker och agenten är igång.'
+      'Väntar på Docker'
     );
     $('claim-code').textContent = '—';
     $('copy-claim').disabled = true;
   } else if (status.enrollmentCompleted) {
     setCard(
-      'claim-card', 'claim-dot', 'claim-badge', 'claim-title', 'claim-detail',
+      'claim-card', 'claim-dot', 'claim-badge', 'claim-value',
       'ok', 'Klar',
-      'Redan ansluten',
-      'Agenten har slutfört sin anslutning till mastern.'
+      (status.nodeName || '').trim() || '—'
     );
     $('claim-code').textContent = 'Ansluten';
     $('copy-claim').disabled = true;
   } else if (status.claimCode) {
     setCard(
-      'claim-card', 'claim-dot', 'claim-badge', 'claim-title', 'claim-detail',
+      'claim-card', 'claim-dot', 'claim-badge', 'claim-value',
       'warn', 'Väntar',
-      'Anslut agenten',
-      'Kopiera koden och klistra in den under Min nod.'
+      'Väntar på koppling'
     );
     $('claim-code').textContent = status.claimCode;
     $('copy-claim').disabled = false;
   } else {
     setCard(
-      'claim-card', 'claim-dot', 'claim-badge', 'claim-title', 'claim-detail',
+      'claim-card', 'claim-dot', 'claim-badge', 'claim-value',
       'idle', 'Väntar',
-      'Claim-kod',
-      'Koden visas när agenten har startat.'
+      'Ingen kod ännu'
     );
     $('claim-code').textContent = '—';
     $('copy-claim').disabled = true;
@@ -555,9 +567,7 @@ function renderServers(status) {
     prune.hidden = stopped === 0;
     prune.textContent = stopped === 1 ? 'Rensa 1 stoppad' : `Rensa ${stopped} stoppade`;
   }
-  empty.textContent = status.dockerOk === false
-    ? 'Serverlistan kan inte läsas förrän Docker Desktop är igång.'
-    : 'Här listas de servrar som agenten kör på den här datorn. Skapa en server i panelen på craftpilot.se – så dyker den upp här med status.';
+  empty.textContent = status.dockerOk === false ? 'Docker är inte igång.' : 'Inga servrar ännu.';
 }
 
 function setBusy(busy) {
