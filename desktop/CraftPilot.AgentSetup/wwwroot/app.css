@@ -305,8 +305,10 @@ h1 span {
 }
 
 .stats-grid {
+  /* 3x2 i stället för 6x1: sex smala rutor klippte värden och hints
+     (t.ex. panelversionen), medan tre kolumner ger plats för texten. */
   display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
   margin-bottom: 14px;
 }
