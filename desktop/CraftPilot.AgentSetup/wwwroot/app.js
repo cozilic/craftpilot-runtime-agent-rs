@@ -95,6 +95,78 @@ async function checkVersion() {
   }
 }
 
+function formatBytes(bytes, digits = 1) {
+  if (!Number.isFinite(bytes) || bytes <= 0) {
+    return '0 B';
+  }
+
+  const units = ['B', 'kB', 'MB', 'GB', 'TB'];
+  let value = bytes;
+  let index = 0;
+  while (value >= 1024 && index < units.length - 1) {
+    value /= 1024;
+    index += 1;
+  }
+
+  return `${value.toLocaleString('sv-SE', {
+    minimumFractionDigits: index === 0 ? 0 : digits,
+    maximumFractionDigits: index === 0 ? 0 : digits,
+  })} ${units[index]}`;
+}
+
+// Översiktens statistik kommer helt från datorn: Docker-containrarna,
+// serverdata-mappen och Windows egna räknare.
+function renderOverview(status) {
+  const stats = status.stats ?? {};
+  const host = (status.hostName || '').trim();
+  const name = (status.nodeName || host || 'Den här noden').trim();
+
+  $('node-title').textContent = name;
+  $('node-subtitle').textContent = status.nodeName
+    ? `Nodnamn i panelen · maskin ${host || 'okänd'}`
+    : `Maskin ${host || 'okänd'}`;
+
+  const total = stats.serversTotal ?? 0;
+  const running = stats.serversRunning ?? 0;
+  $('stat-servers').textContent = `${running}/${total}`;
+  $('stat-servers-hint').textContent = total === 0
+    ? 'Inga servrar ännu'
+    : `${total - running} väntar på start`;
+
+  if (stats.playersKnown) {
+    $('stat-players').textContent = `${stats.playersOnline ?? 0}`;
+    $('stat-players-hint').textContent = stats.playersMax
+      ? `av ${stats.playersMax} platser`
+      : 'online just nu';
+  } else {
+    $('stat-players').textContent = '—';
+    $('stat-players-hint').textContent = running === 0 ? 'Inga servrar igång' : 'Servrarna svarar inte';
+  }
+
+  if (stats.memoryTotalBytes > 0) {
+    $('stat-memory').textContent = `${formatBytes(stats.memoryUsedBytes)} / ${formatBytes(stats.memoryTotalBytes)}`;
+    $('stat-memory-hint').textContent =
+      `${Math.round((stats.memoryUsedBytes / stats.memoryTotalBytes) * 100)} % använt`;
+  } else {
+    $('stat-memory').textContent = '—';
+    $('stat-memory-hint').textContent = 'Kunde inte läsas';
+  }
+
+  if (stats.diskTotalBytes > 0) {
+    $('stat-disk').textContent = `${formatBytes(stats.diskUsedBytes)} / ${formatBytes(stats.diskTotalBytes)}`;
+    $('stat-disk-hint').textContent =
+      `${Math.round((stats.diskUsedBytes / stats.diskTotalBytes) * 100)} % använt`;
+  } else {
+    $('stat-disk').textContent = '—';
+    $('stat-disk-hint').textContent = 'Kunde inte läsas';
+  }
+
+  const down = stats.networkDownBps ?? 0;
+  const up = stats.networkUpBps ?? 0;
+  $('stat-network').textContent = `↓ ${formatBytes(down)}/s`;
+  $('stat-network-hint').textContent = `↑ ${formatBytes(up)}/s`;
+}
+
 function shortError(value) {
   if (!value) {
     return 'Ingen detalj tillgänglig.';
@@ -137,6 +209,7 @@ function setDockerNotice(status, dockerState) {
 
 function renderStatus(status) {
   state.loaded = true;
+  renderOverview(status);
   const dockerState = status.dockerState || (status.dockerOk ? 'ready' : 'error');
   state.dockerReady = dockerState === 'ready';
   state.installed = Boolean(status.installed);
@@ -410,6 +483,7 @@ const SERVER_STATES = {
   exited: { label: 'Stoppad', kind: 'idle' },
   created: { label: 'Skapad', kind: 'idle' },
   dead: { label: 'Kraschad', kind: 'bad' },
+  absent: { label: 'Inte startad', kind: 'idle' },
 };
 
 function serverRow(server) {
@@ -434,7 +508,9 @@ function serverRow(server) {
 
   const image = document.createElement('span');
   image.className = 'server-image';
-  image.textContent = `${server.name} · ${server.image}`;
+  image.textContent = server.state === 'absent'
+    ? 'Väntar på första start'
+    : `${server.name} · ${server.image}`;
 
   main.append(name, image);
 
@@ -471,7 +547,9 @@ function renderServers(status) {
   list.hidden = servers.length === 0;
   empty.hidden = servers.length > 0;
 
-  const stopped = servers.filter((server) => !server.running && server.state !== 'running').length;
+  const stopped = servers.filter(
+    (server) => !server.running && server.state !== 'running' && server.state !== 'absent'
+  ).length;
   const prune = $('prune-servers');
   if (prune) {
     prune.hidden = stopped === 0;

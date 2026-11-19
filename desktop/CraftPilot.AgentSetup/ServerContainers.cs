@@ -7,9 +7,17 @@ namespace CraftPilot.AgentSetup;
 /// den direkt från Docker (labeln <c>craftpilot.managed</c>) i stället för från
 /// mastern, så listan fungerar även när mastern är otillgänglig.
 /// </summary>
-public sealed record ServerContainer(string Name, string ServerId, string State, string Image)
+public sealed record ServerContainer(
+    string Name,
+    string ServerId,
+    string State,
+    string Image,
+    int? HostPort = null)
 {
     public bool Running => string.Equals(State, "running", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>Servern finns i serverdata-mappen men har ingen container ännu.</summary>
+    public bool WaitingForFirstStart => string.Equals(State, "absent", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>Kort id, samma som agenten använder i containernamnet.</summary>
     public string ShortId => ServerId.Length >= 8 ? ServerId[..8] : ServerId;
@@ -23,6 +31,7 @@ public sealed record ServerContainer(string Name, string ServerId, string State,
         "restarting" => "Startar om",
         "paused" => "Pausad",
         "dead" => "Kraschad",
+        "absent" => "Inte startad",
         _ => CultureInfo.InvariantCulture.TextInfo.ToTitleCase(State),
     };
 }
@@ -33,7 +42,8 @@ public static class ServerContainers
     /// <c>docker ps</c>-format med pipe som avgränsare: inget av fälten
     /// (namn, id, state, image) innehåller pipe.
     /// </summary>
-    public const string Format = "{{.Names}}|{{.Label \"craftpilot.server_id\"}}|{{.State}}|{{.Image}}";
+    public const string Format =
+        "{{.Names}}|{{.Label \"craftpilot.server_id\"}}|{{.State}}|{{.Image}}|{{.Ports}}";
 
     public static IReadOnlyList<ServerContainer> Parse(string? output)
     {
@@ -52,7 +62,7 @@ public static class ServerContainers
             }
 
             var parts = line.Split('|');
-            if (parts.Length != 4)
+            if (parts.Length < 4)
             {
                 continue;
             }
@@ -69,14 +79,76 @@ public static class ServerContainers
                 name,
                 serverId,
                 parts[2].Trim().ToLowerInvariant(),
-                parts[3].Trim()));
+                parts[3].Trim(),
+                parts.Length > 4 ? HostPortFrom(parts[4]) : null));
         }
 
-        return servers
-            .OrderByDescending(server => server.Running)
-            .ThenBy(server => server.Name, StringComparer.Ordinal)
-            .ToList();
+        return Sorted(servers);
     }
+
+    /// <summary>
+    /// Lägger till de servrar som finns i serverdata-mappen men saknar
+    /// container. En nyskapad server får sin katalog av den första
+    /// snapshoten, långt innan den startas — utan de katalogerna visade
+    /// panelen ingenting förrän servern hade startats och fått en container
+    /// (2026-11-19).
+    /// </summary>
+    public static IReadOnlyList<ServerContainer> WithServerDirectories(
+        IEnumerable<ServerContainer> containers,
+        string? dataDir)
+    {
+        var servers = containers.ToList();
+
+        if (string.IsNullOrWhiteSpace(dataDir) || !Directory.Exists(dataDir))
+        {
+            return Sorted(servers);
+        }
+
+        var known = new HashSet<string>(
+            servers.Select(server => server.ServerId),
+            StringComparer.OrdinalIgnoreCase);
+
+        foreach (var directory in Directory.EnumerateDirectories(dataDir))
+        {
+            var serverId = Path.GetFileName(directory);
+            if (!Guid.TryParse(serverId, out _) || !known.Add(serverId))
+            {
+                continue;
+            }
+
+            servers.Add(new ServerContainer(string.Empty, serverId, "absent", string.Empty));
+        }
+
+        return Sorted(servers);
+    }
+
+    /// <summary>Värdporten som containern publicerar, för server-list-ping.</summary>
+    private static int? HostPortFrom(string ports)
+    {
+        foreach (var mapping in ports.Split(','))
+        {
+            var arrow = mapping.IndexOf("->", StringComparison.Ordinal);
+            if (arrow < 0)
+            {
+                continue;
+            }
+
+            var left = mapping[..arrow].Trim();
+            var colon = left.LastIndexOf(':');
+            if (colon >= 0 && int.TryParse(left[(colon + 1)..], out var port) && port is > 0 and <= 65535)
+            {
+                return port;
+            }
+        }
+
+        return null;
+    }
+
+    private static List<ServerContainer> Sorted(IEnumerable<ServerContainer> servers) =>
+        servers
+            .OrderByDescending(server => server.Running)
+            .ThenBy(server => server.ShortId, StringComparer.Ordinal)
+            .ToList();
 
     /// <summary>
     /// Containrar som panelen får städa bort: stoppade containrar med agentens
@@ -84,7 +156,7 @@ public static class ServerContainers
     /// </summary>
     public static IReadOnlyList<ServerContainer> Stopped(IEnumerable<ServerContainer> servers) =>
         servers
-            .Where(server => !server.Running && IsManagedName(server.Name))
+            .Where(server => !server.Running && !server.WaitingForFirstStart && IsManagedName(server.Name))
             .ToList();
 
     /// <summary>

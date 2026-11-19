@@ -54,14 +54,11 @@
 
     <main>
       <section class="tab-panel" id="tab-main" role="tabpanel" aria-labelledby="tab-button-main">
-        <section class="hero">
-          <div class="hero-copy">
+        <section class="overview-head">
+          <div class="overview-copy">
             <p class="eyebrow">Översikt</p>
-            <h1>Din nod i ett ögonkast.<br><span>Allt grönt – då är du klar.</span></h1>
-            <p class="lede">
-              Här ser du om Docker, mastern och agenten mår bra, och vilka servrar som körs på
-              den här datorn. Inställningar och logg ligger på egna flikar.
-            </p>
+            <h1 id="node-title">Den här noden</h1>
+            <p class="lede" id="node-subtitle">Docker, mastern och agenten – och servrarna på den här datorn.</p>
           </div>
           <div class="hero-actions">
             <button class="button button-quiet" id="refresh" type="button">
@@ -72,6 +69,34 @@
               Installera / starta
             </button>
           </div>
+        </section>
+
+        <section class="stats-grid" aria-label="Nodstatistik">
+          <article class="stat-card">
+            <span class="stat-label">Servrar</span>
+            <strong class="stat-value" id="stat-servers">0/0</strong>
+            <span class="stat-hint" id="stat-servers-hint">Inga servrar ännu</span>
+          </article>
+          <article class="stat-card">
+            <span class="stat-label">Spelare</span>
+            <strong class="stat-value" id="stat-players">—</strong>
+            <span class="stat-hint" id="stat-players-hint">Inga servrar igång</span>
+          </article>
+          <article class="stat-card">
+            <span class="stat-label">Minne</span>
+            <strong class="stat-value" id="stat-memory">—</strong>
+            <span class="stat-hint" id="stat-memory-hint">RAM på datorn</span>
+          </article>
+          <article class="stat-card">
+            <span class="stat-label">Disk</span>
+            <strong class="stat-value" id="stat-disk">—</strong>
+            <span class="stat-hint" id="stat-disk-hint">Serverdata-disken</span>
+          </article>
+          <article class="stat-card">
+            <span class="stat-label">Nätverk</span>
+            <strong class="stat-value" id="stat-network">—</strong>
+            <span class="stat-hint" id="stat-network-hint">Ingen mätning ännu</span>
+          </article>
         </section>
 
         <section class="update-banner" id="update-banner" role="status" aria-live="polite" hidden>

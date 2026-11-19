@@ -26,13 +26,43 @@ public sealed class StatusResponse
     public bool Installed { get; init; }
     public bool EnrollmentCompleted { get; init; }
     public string? ClaimCode { get; init; }
+    /// <summary>Nodens namn i panelen (från agentloggen), null tills agenten rapporterat det.</summary>
+    public string? NodeName { get; init; }
+    /// <summary>Maskinens hostname — gör flera agenter på olika datorer åtskiljbara.</summary>
+    public string HostName { get; init; } = Environment.MachineName;
     public string DataDir { get; init; } = string.Empty;
     public string InstallDir { get; init; } = string.Empty;
     public bool StartupEnabled { get; init; }
     public bool Busy { get; init; }
 
-    /// Servercontainrar som agenten kör på den här datorn.
+    /// <summary>Nodens resursläge, sammanställt lokalt (Docker + värden).</summary>
+    public HostStats Stats { get; init; } = new();
+
+    /// Servercontainrar som agenten kör på den här datorn, plus servrar som
+    /// finns i serverdata-mappen men ännu inte startats.
     public IReadOnlyList<ServerContainer> Servers { get; init; } = [];
+}
+
+/// <summary>
+/// Statistik för agentpanelens översikt. Allt hämtas på datorn — inget
+/// kräver masterns API: Docker-containrarna, serverdata-mappen och Windows
+/// egna räknare.
+/// </summary>
+public sealed record HostStats
+{
+    public int ServersTotal { get; init; }
+    public int ServersRunning { get; init; }
+    public bool PlayersKnown { get; init; }
+    public int PlayersOnline { get; init; }
+    public int? PlayersMax { get; init; }
+    public long MemoryUsedBytes { get; init; }
+    public long MemoryTotalBytes { get; init; }
+    public long DiskUsedBytes { get; init; }
+    public long DiskTotalBytes { get; init; }
+    public double NetworkDownBps { get; init; }
+    public double NetworkUpBps { get; init; }
+
+    public static HostStats Empty { get; } = new();
 }
 
 public sealed record OperationResponse(

@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Net.Http;
@@ -15,6 +16,14 @@ public sealed class AgentSetupService
     private const string NetworkName = "craftpilot-servers";
     private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(5) };
     private readonly SetupSession _session;
+    private readonly HostStatsCollector _hostStats = new();
+    // Spelarantalet pingas mot serverns publicerade port. Statusfrågan går
+    // var femte sekund, så svaren cachas kort i stället för att öppna en ny
+    // TCP-anslutning varje gång.
+    private readonly ConcurrentDictionary<int, (DateTime At, (int Online, int Max)? Value)> _players = new();
+    // Senast lästa nodnamn. Loggen visar bara de 300 senaste raderna, så
+    // namnet får inte försvinna ur panelen när agenten loggat vidare.
+    private string? _nodeName;
 
     public AgentSetupService(SetupSession session) => _session = session;
 
@@ -135,10 +144,12 @@ public sealed class AgentSetupService
                 var pendingCode = ClaimCodeParser.ExtractPending(logs);
                 var completed = pendingCode is null
                     && logs.Contains(ClaimCodeParser.CompletedMarker, StringComparison.OrdinalIgnoreCase);
+                _nodeName = NodeNameParser.Extract(logs) ?? _nodeName;
                 status = CopyStatus(
                     status,
                     enrollmentCompleted: completed,
-                    claimCode: pendingCode);
+                    claimCode: pendingCode,
+                    nodeName: _nodeName);
             }
 
             // Agentens servercontainrar bär labeln craftpilot.managed. Panelen
@@ -157,7 +168,67 @@ public sealed class AgentSetupService
             }
         }
 
-        return status;
+        // Serverkataloger utan container visas som "Inte startad", så en
+        // nyskapad server syns redan innan den startats första gången.
+        var merged = ServerContainers.WithServerDirectories(status.Servers, status.DataDir);
+        var (playersOnline, playersMax, playersKnown) = await CountPlayersAsync(merged, ct);
+        var stats = _hostStats.Collect(status.DataDir) with
+        {
+            ServersTotal = merged.Count,
+            ServersRunning = merged.Count(server => server.Running),
+            PlayersKnown = playersKnown,
+            PlayersOnline = playersOnline,
+            PlayersMax = playersMax,
+        };
+
+        return CopyStatus(status, servers: merged, stats: stats, nodeName: _nodeName);
+    }
+
+    /// <summary>
+    /// Summerar spelarantalet från server-list-ping mot körda servrar. Servrar
+    /// som inte svarar (fel port, annan speltyp eller fortfarande startar)
+    /// räknas inte som noll spelare — då visas antalet som okänt i panelen.
+    /// </summary>
+    private async Task<(int Online, int? Max, bool Known)> CountPlayersAsync(
+        IReadOnlyList<ServerContainer> servers,
+        CancellationToken ct)
+    {
+        var targets = servers
+            .Where(server => server.Running && server.HostPort is not null)
+            .Select(server => server.HostPort!.Value)
+            .Distinct()
+            .ToList();
+
+        if (targets.Count == 0)
+        {
+            return (0, null, false);
+        }
+
+        var now = DateTime.UtcNow;
+        var results = await Task.WhenAll(targets.Select(async port =>
+        {
+            if (_players.TryGetValue(port, out var cached) && now - cached.At < TimeSpan.FromSeconds(5))
+            {
+                return cached.Value;
+            }
+
+            var value = await MinecraftStatusPing.QueryAsync(
+                "127.0.0.1",
+                port,
+                TimeSpan.FromMilliseconds(800),
+                ct);
+            _players[port] = (now, value);
+            return value;
+        }));
+
+        var answered = results
+            .Where(result => result is not null)
+            .Select(result => result!.Value)
+            .ToList();
+
+        return answered.Count == 0
+            ? (0, null, false)
+            : (answered.Sum(result => result.Online), answered.Sum(result => result.Max), true);
     }
 
     public Task<OperationResponse> InstallAsync(InstallRequest request, CancellationToken ct = default) =>
@@ -770,6 +841,8 @@ public sealed class AgentSetupService
         string? agentError = null,
         bool? enrollmentCompleted = null,
         string? claimCode = null,
+        string? nodeName = null,
+        HostStats? stats = null,
         IReadOnlyList<ServerContainer>? servers = null) =>
         new()
         {
@@ -792,10 +865,13 @@ public sealed class AgentSetupService
             Installed = source.Installed,
             EnrollmentCompleted = enrollmentCompleted ?? source.EnrollmentCompleted,
             ClaimCode = claimCode ?? source.ClaimCode,
+            NodeName = nodeName ?? source.NodeName,
+            HostName = source.HostName,
             DataDir = source.DataDir,
             InstallDir = source.InstallDir,
             StartupEnabled = source.StartupEnabled,
             Busy = source.Busy,
+            Stats = stats ?? source.Stats,
             Servers = servers ?? source.Servers,
         };
 

@@ -40,6 +40,21 @@ uppmaning att starta Docker Desktop. Inga compose-filer skrivs förrän Docker �
 5. Statuskorten ska bli gröna för Docker, master och agent. Efter slutförd anslutning visar
    panelen **Redan ansluten** i stället för en ny kod.
 
+## Översiktens statistik och nodnamn
+
+Överst i **Översikt** står nodens namn och datorns resursläge: antal servrar (körda av totalt),
+spelare online, RAM, disk och nätverkstrafik. Statistiken hämtas lokalt från Docker, Windows och
+serverdata-mappen; mastern behöver inte vara nåbar.
+
+Nodnamnet läses ur agentloggen (`node_name=...`). Det kräver en agentimage som skriver ut namnet
+vid start och när panelen byter namn på noden — äldre images visar i stället datorns hostname.
+Spelarantalet kommer från Minecrafts server-list-ping mot serverns publicerade port; en server som
+inte svarar visas som **—** i stället för noll spelare.
+
+Servrar som skapats i panelen men ännu inte startats listas också under **Servrar på den här
+noden**, med status **Inte startad**. De har en katalog i serverdata-mappen men ingen container
+ännu; **Rensa stoppade** rör dem inte.
+
 ## Tray och automatisk start
 
 Panelen har en tray-ikon som visar om Docker, mastern och agenten är redo. Stäng fönstret med
