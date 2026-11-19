@@ -1,6 +1,17 @@
 const token = document.querySelector('meta[name="cp-token"]')?.content ?? '';
 const $ = (id) => document.getElementById(id);
-const state = { busy: false, loaded: false, dockerReady: false, installed: false, agentExists: false, updating: false };
+const i18n = window.CraftPilotI18n;
+const t = (key, params) => i18n.t(key, params);
+const state = {
+  busy: false,
+  loaded: false,
+  dockerReady: false,
+  installed: false,
+  agentExists: false,
+  updating: false,
+  status: null,
+  version: null,
+};
 
 async function api(path, options = {}) {
   const response = await fetch(path, {
@@ -64,6 +75,8 @@ function imageTag(image) {
 }
 
 function renderVersion(check) {
+  state.version = check;
+
   const current = versionLabel(check.currentVersion);
   const pill = $('panel-version');
   const banner = $('update-banner');
@@ -72,24 +85,26 @@ function renderVersion(check) {
   pill.textContent = current;
   pill.dataset.state = check.error ? 'error' : 'ok';
   pill.title = check.error
-    ? `Panelversion ${current}. ${check.error}`
-    : `Panelversion ${current}`;
+    ? t('version.panelTitleError', { version: current, error: check.error })
+    : t('version.panelTitle', { version: current });
 
   // Panelen har en egen siffra i översikten: versionen och om en nyare finns.
   const panelStat = $('stat-panel');
   if (panelStat) {
     panelStat.textContent = current;
     $('stat-panel-hint').textContent = check.updateAvailable && check.latestVersion
-      ? `Ny ${versionLabel(check.latestVersion)} finns`
-      : (check.error ? 'Kunde inte kontrolleras' : 'Senaste versionen');
+      ? t('version.newAvailable', { version: versionLabel(check.latestVersion) })
+      : (check.error ? t('version.checkFailed') : t('version.latest'));
   }
 
   if (check.updateAvailable && check.latestVersion && check.releaseUrl) {
     banner.hidden = false;
     banner.dataset.state = 'available';
     $('update-dot').className = 'dot dot-warn';
-    $('update-title').textContent = `Ny panelversion ${versionLabel(check.latestVersion)} finns`;
-    $('update-text').textContent = `Du kör ${current}. Panelen hämtar filen från GitHub, kontrollerar kontrollsumman och startar om sig själv.`;
+    $('update-title').textContent = t('version.availableTitle', {
+      version: versionLabel(check.latestVersion),
+    });
+    $('update-text').textContent = t('version.availableText', { current });
     link.href = check.releaseUrl;
     link.hidden = false;
     $('update-now').hidden = false;
@@ -100,8 +115,8 @@ function renderVersion(check) {
     banner.hidden = false;
     banner.dataset.state = 'error';
     $('update-dot').className = 'dot dot-idle';
-    $('update-title').textContent = 'Kunde inte kontrollera panelversionen';
-    $('update-text').textContent = `${check.error} Klicka på Kontrollera igen för att försöka på nytt.`;
+    $('update-title').textContent = t('version.errorTitle');
+    $('update-text').textContent = t('version.errorText', { error: check.error });
     link.hidden = true;
     $('update-now').hidden = true;
     return;
@@ -116,7 +131,7 @@ async function checkVersion() {
   try {
     renderVersion(await api('/api/version'));
   } catch (error) {
-    renderVersion({ error: `Kunde inte läsa versionsinformationen: ${error.message}` });
+    renderVersion({ error: t('version.readFailed', { error: error.message }) });
   }
 }
 
@@ -133,7 +148,8 @@ function formatBytes(bytes, digits = 1) {
     index += 1;
   }
 
-  return `${value.toLocaleString('sv-SE', {
+  const locale = i18n.language === 'sv' ? 'sv-SE' : 'en-GB';
+  return `${value.toLocaleString(locale, {
     minimumFractionDigits: index === 0 ? 0 : digits,
     maximumFractionDigits: index === 0 ? 0 : digits,
   })} ${units[index]}`;
@@ -144,46 +160,50 @@ function formatBytes(bytes, digits = 1) {
 function renderOverview(status) {
   const stats = status.stats ?? {};
   const host = (status.hostName || '').trim();
-  const name = (status.nodeName || host || 'Den här noden').trim();
+  const name = (status.nodeName || host || t('overview.thisNode')).trim();
 
   // Nodens namn i panelen är rubriken; maskinen står kvar på raden under så
   // två agenter på olika datorer går att skilja åt.
   $('node-title').textContent = name;
-  $('node-meta').textContent = host ? `Maskin ${host}` : '—';
+  $('node-meta').textContent = host ? t('overview.machine', { host }) : '—';
 
   const total = stats.serversTotal ?? 0;
   const running = stats.serversRunning ?? 0;
   $('stat-servers').textContent = `${running}/${total}`;
   $('stat-servers-hint').textContent = total === 0
-    ? 'Inga servrar ännu'
-    : `${total - running} väntar på start`;
+    ? t('stats.noServers')
+    : t('stats.waitingToStart', { count: total - running });
 
   if (stats.playersKnown) {
     $('stat-players').textContent = `${stats.playersOnline ?? 0}`;
     $('stat-players-hint').textContent = stats.playersMax
-      ? `av ${stats.playersMax} platser`
-      : 'online just nu';
+      ? t('stats.ofSlots', { max: stats.playersMax })
+      : t('stats.onlineNow');
   } else {
     $('stat-players').textContent = '—';
-    $('stat-players-hint').textContent = running === 0 ? 'Inga servrar igång' : 'Servrarna svarar inte';
+    $('stat-players-hint').textContent = running === 0
+      ? t('stats.noServersRunning')
+      : t('stats.noResponse');
   }
 
   if (stats.memoryTotalBytes > 0) {
     $('stat-memory').textContent = `${formatBytes(stats.memoryUsedBytes)} / ${formatBytes(stats.memoryTotalBytes)}`;
-    $('stat-memory-hint').textContent =
-      `${Math.round((stats.memoryUsedBytes / stats.memoryTotalBytes) * 100)} % använt`;
+    $('stat-memory-hint').textContent = t('stats.percentUsed', {
+      percent: Math.round((stats.memoryUsedBytes / stats.memoryTotalBytes) * 100),
+    });
   } else {
     $('stat-memory').textContent = '—';
-    $('stat-memory-hint').textContent = 'Kunde inte läsas';
+    $('stat-memory-hint').textContent = t('stats.unreadable');
   }
 
   if (stats.diskTotalBytes > 0) {
     $('stat-disk').textContent = `${formatBytes(stats.diskUsedBytes)} / ${formatBytes(stats.diskTotalBytes)}`;
-    $('stat-disk-hint').textContent =
-      `${Math.round((stats.diskUsedBytes / stats.diskTotalBytes) * 100)} % använt`;
+    $('stat-disk-hint').textContent = t('stats.percentUsed', {
+      percent: Math.round((stats.diskUsedBytes / stats.diskTotalBytes) * 100),
+    });
   } else {
     $('stat-disk').textContent = '—';
-    $('stat-disk-hint').textContent = 'Kunde inte läsas';
+    $('stat-disk-hint').textContent = t('stats.unreadable');
   }
 
   const down = stats.networkDownBps ?? 0;
@@ -194,10 +214,10 @@ function renderOverview(status) {
 
 function shortError(value) {
   if (!value) {
-    return 'Ingen detalj tillgänglig.';
+    return t('error.noDetail');
   }
 
-  return value.split('\n').map((line) => line.trim()).find(Boolean) ?? 'Okänt fel.';
+  return value.split('\n').map((line) => line.trim()).find(Boolean) ?? t('error.unknown');
 }
 
 function setDockerNotice(status, dockerState) {
@@ -217,22 +237,21 @@ function setDockerNotice(status, dockerState) {
   notice.hidden = false;
 
   $('docker-notice-title').textContent = notInstalled
-    ? (desktopPresent ? 'Docker-kommandot hittades inte' : 'Docker Desktop saknas')
-    : (dockerState === 'not-running' ? 'Docker Desktop är inte igång' : 'Docker svarar inte');
+    ? (desktopPresent ? t('docker.missingCommandTitle') : t('docker.missingDesktopTitle'))
+    : (dockerState === 'not-running' ? t('docker.notRunningTitle') : t('docker.noResponseTitle'));
 
   $('docker-notice-text').textContent = notInstalled
-    ? (desktopPresent
-      ? 'Docker Desktop finns men kommandot docker hittades inte. Starta om Docker Desktop och panelen.'
-      : 'Installera Docker Desktop med Linux-containrar, starta det och klicka på Kontrollera igen.')
+    ? (desktopPresent ? t('docker.missingCommandText') : t('docker.missingDesktopText'))
     : (dockerState === 'not-running'
-      ? 'Starta Docker Desktop och vänta tills motorn är redo. Installationen är blockerad tills dess.'
-      : 'Kontrollera Docker Desktop och klicka på Kontrollera igen.');
+      ? t('docker.notRunningText')
+      : t('docker.errorText'));
 
   download.hidden = !notInstalled || desktopPresent;
   cardLink.hidden = !notInstalled || desktopPresent;
 }
 
 function renderStatus(status) {
+  state.status = status;
   state.loaded = true;
   renderOverview(status);
   const dockerState = status.dockerState || (status.dockerOk ? 'ready' : 'error');
@@ -243,25 +262,25 @@ function renderStatus(status) {
   if (state.dockerReady) {
     setCard(
       'docker-card', 'docker-dot', 'docker-badge', 'docker-value',
-      'ok', 'Redo',
-      status.dockerVersion ? `Server ${status.dockerVersion}` : 'Svarar'
+      'ok', t('common.ready'),
+      status.dockerVersion ? t('docker.server', { version: status.dockerVersion }) : t('docker.responding')
     );
   } else if (dockerState === 'not-installed') {
     setCard(
       'docker-card', 'docker-dot', 'docker-badge', 'docker-value',
-      'warn', 'Saknas',
-      status.dockerDesktopInstalled ? 'Kommandot docker saknas' : 'Inte installerat'
+      'warn', t('common.missing'),
+      status.dockerDesktopInstalled ? t('docker.commandMissing') : t('docker.notInstalledValue')
     );
   } else if (dockerState === 'not-running') {
     setCard(
       'docker-card', 'docker-dot', 'docker-badge', 'docker-value',
-      'warn', 'Stoppad',
-      'Motorn kör inte'
+      'warn', t('common.stopped'),
+      t('docker.engineDown')
     );
   } else {
     setCard(
       'docker-card', 'docker-dot', 'docker-badge', 'docker-value',
-      'bad', 'Fel',
+      'bad', t('common.error'),
       shortError(status.dockerError),
       status.dockerError ?? ''
     );
@@ -273,16 +292,16 @@ function renderStatus(status) {
     const latency = status.masterLatencyMs != null ? ` · ${status.masterLatencyMs} ms` : '';
     const version = status.masterVersion
       ? (/^v/i.test(status.masterVersion) ? status.masterVersion : `v${status.masterVersion}`)
-      : 'Svarar';
+      : t('master.responding');
     setCard(
       'master-card', 'master-dot', 'master-badge', 'master-value',
-      'ok', 'Online',
+      'ok', t('common.online'),
       `${version}${latency}`
     );
   } else {
     setCard(
       'master-card', 'master-dot', 'master-badge', 'master-value',
-      'bad', 'Fel',
+      'bad', t('common.error'),
       shortError(status.masterError),
       status.masterError ?? ''
     );
@@ -292,65 +311,65 @@ function renderStatus(status) {
   if (!state.dockerReady) {
     setCard(
       'agent-card', 'agent-dot', 'agent-badge', 'agent-value',
-      'idle', 'Väntar',
-      'Docker är inte igång'
+      'idle', t('common.waiting'),
+      t('agent.dockerDown')
     );
   } else if (status.agentRunning) {
     setCard(
       'agent-card', 'agent-dot', 'agent-badge', 'agent-value',
-      'ok', 'Körs',
+      'ok', t('common.running'),
       tag ? versionLabel(tag) : '—',
       status.agentImage ?? ''
     );
   } else if (status.installed) {
     setCard(
       'agent-card', 'agent-dot', 'agent-badge', 'agent-value',
-      'warn', 'Stoppad',
-      'Containern kör inte'
+      'warn', t('common.stopped'),
+      t('agent.containerDown')
     );
   } else if (status.agentExists) {
     setCard(
       'agent-card', 'agent-dot', 'agent-badge', 'agent-value',
-      'warn', 'Hittad',
-      'Saknar installationsfiler'
+      'warn', t('common.found'),
+      t('agent.missingFiles')
     );
   } else {
     setCard(
       'agent-card', 'agent-dot', 'agent-badge', 'agent-value',
-      'idle', 'Saknas',
-      'Inte installerad'
+      'idle', t('common.missing'),
+      t('common.notInstalled')
     );
   }
 
   if (!state.dockerReady) {
     setCard(
       'claim-card', 'claim-dot', 'claim-badge', 'claim-value',
-      'idle', 'Väntar',
-      'Väntar på Docker'
+      'idle', t('common.waiting'),
+      t('claim.waitingDocker')
     );
     $('claim-code').textContent = '—';
     $('copy-claim').disabled = true;
   } else if (status.enrollmentCompleted) {
     setCard(
       'claim-card', 'claim-dot', 'claim-badge', 'claim-value',
-      'ok', 'Klar',
+      'ok', t('common.done'),
       (status.nodeName || '').trim() || '—'
     );
-    $('claim-code').textContent = 'Ansluten';
+    $('claim-code').textContent = t('common.connected');
     $('copy-claim').disabled = true;
   } else if (status.claimCode) {
     setCard(
       'claim-card', 'claim-dot', 'claim-badge', 'claim-value',
-      'warn', 'Väntar',
-      'Väntar på koppling'
+      'warn', t('common.waiting'),
+      t('claim.waitingLink')
     );
     $('claim-code').textContent = status.claimCode;
     $('copy-claim').disabled = false;
   } else {
     setCard(
       'claim-card', 'claim-dot', 'claim-badge', 'claim-value',
-      'idle', 'Väntar',
-      'Ingen kod ännu'
+      'idle', t('common.waiting'),
+      t('claim.noCode')
     );
     $('claim-code').textContent = '—';
     $('copy-claim').disabled = true;
@@ -365,7 +384,7 @@ function renderStatus(status) {
 
   $('install-dir').textContent = status.installDir || '—';
   $('master-link').href = 'https://craftpilot.se/node';
-  $('settings-note').textContent = status.busy ? 'Arbetar…' : 'Master låst';
+  $('settings-note').textContent = status.busy ? t('common.working') : t('settings.masterLocked');
 
   renderServers(status);
 
@@ -381,24 +400,27 @@ async function refresh(includeLogs = false) {
       await loadLogs();
     }
   } catch (error) {
-    appendLog(`Kunde inte läsa status: ${error.message}`);
+    appendLog(t('log.statusReadFailed', { error: error.message }));
   }
 }
 
 async function loadLogs() {
   try {
     const result = await api('/api/logs');
-    $('log').textContent = result.logs || 'Ingen agentlogg ännu.';
+    $('log').textContent = result.logs || t('log.noAgentLog');
+    $('log').dataset.placeholder = 'false';
     $('log').scrollTop = $('log').scrollHeight;
   } catch (error) {
-    appendLog(`Kunde inte läsa loggen: ${error.message}`);
+    appendLog(t('log.logsReadFailed', { error: error.message }));
   }
 }
 
 function appendLog(message) {
   const log = $('log');
-  const current = log.textContent === 'Startar panelen…' ? '' : log.textContent;
+  const placeholder = log.dataset.placeholder !== 'false';
+  const current = placeholder ? '' : log.textContent;
   log.textContent = `${current}${current ? '\n' : ''}${message}`;
+  log.dataset.placeholder = 'false';
   log.scrollTop = log.scrollHeight;
 }
 
@@ -488,19 +510,53 @@ function setupTabs() {
   selectTab(saved ?? 'main');
 }
 
+// Språkvalet ligger i Inställningar. Panelen byter texter direkt och ritar om
+// översikt och version, så även dynamiska rader får rätt språk.
+function setupLanguage() {
+  const selector = $('language');
+  if (!selector) {
+    return;
+  }
+
+  selector.value = i18n.language;
+  selector.addEventListener('change', () => i18n.setLanguage(selector.value));
+}
+
+i18n.onChange = () => {
+  i18n.applyStatic();
+
+  const selector = $('language');
+  if (selector) {
+    selector.value = i18n.language;
+  }
+
+  if ($('log').dataset.placeholder !== 'false') {
+    $('log').textContent = t('log.starting');
+  }
+
+  if (state.version) {
+    renderVersion(state.version);
+  }
+  if (state.status) {
+    renderStatus(state.status);
+  }
+  applyControls();
+};
+
 const SERVER_STATES = {
-  running: { label: 'Körs', kind: 'ok' },
-  restarting: { label: 'Startar om', kind: 'warn' },
-  paused: { label: 'Pausad', kind: 'warn' },
-  exited: { label: 'Stoppad', kind: 'idle' },
-  created: { label: 'Skapad', kind: 'idle' },
-  dead: { label: 'Kraschad', kind: 'bad' },
-  absent: { label: 'Inte startad', kind: 'idle' },
+  running: { key: 'state.running', kind: 'ok' },
+  restarting: { key: 'state.restarting', kind: 'warn' },
+  paused: { key: 'state.paused', kind: 'warn' },
+  exited: { key: 'state.exited', kind: 'idle' },
+  created: { key: 'state.created', kind: 'idle' },
+  dead: { key: 'state.dead', kind: 'bad' },
+  absent: { key: 'state.absent', kind: 'idle' },
 };
 
 function serverRow(server) {
   const info = SERVER_STATES[server.state] ?? {
-    label: server.state ? server.state : 'Okänd',
+    key: null,
+    label: server.state ? server.state : t('common.unknown'),
     kind: 'idle',
   };
 
@@ -521,14 +577,14 @@ function serverRow(server) {
   const image = document.createElement('span');
   image.className = 'server-image';
   image.textContent = server.state === 'absent'
-    ? 'Väntar på första start'
+    ? t('servers.waitingFirstStart')
     : `${server.name} · ${server.image}`;
 
   main.append(name, image);
 
   const badge = document.createElement('span');
   badge.className = `badge badge-${info.kind}`;
-  badge.textContent = info.label;
+  badge.textContent = info.key ? t(info.key) : info.label;
 
   item.append(dot, main, badge);
   return item;
@@ -548,7 +604,7 @@ function renderServers(status) {
   const running = servers.filter((server) => server.state === 'running' || server.running).length;
 
   count.textContent = `${running}/${servers.length}`;
-  count.title = `${running} av ${servers.length} servrar körs`;
+  count.title = t('servers.countTitle', { running, total: servers.length });
   count.className = servers.length === 0
     ? 'badge badge-idle'
     : running === servers.length
@@ -565,9 +621,11 @@ function renderServers(status) {
   const prune = $('prune-servers');
   if (prune) {
     prune.hidden = stopped === 0;
-    prune.textContent = stopped === 1 ? 'Rensa 1 stoppad' : `Rensa ${stopped} stoppade`;
+    prune.textContent = stopped === 1
+      ? t('servers.pruneOne')
+      : t('servers.pruneMany', { count: stopped });
   }
-  empty.textContent = status.dockerOk === false ? 'Docker är inte igång.' : 'Inga servrar ännu.';
+  empty.textContent = status.dockerOk === false ? t('servers.dockerDown') : t('servers.empty');
 }
 
 function setBusy(busy) {
@@ -605,7 +663,7 @@ function startProgress(label) {
 
     const seconds = Math.max(0, Math.round((Date.now() - progressStartedAt) / 1000));
     $('progress-elapsed').textContent = `${seconds} s`;
-    track.setAttribute('aria-valuetext', `${label}, ${seconds} sekunder`);
+    track.setAttribute('aria-valuetext', t('progress.secondsAria', { label, seconds }));
   }, 250);
 }
 
@@ -635,7 +693,7 @@ function setProgressDeterminate(percent) {
   track.setAttribute('aria-valuemin', '0');
   track.setAttribute('aria-valuemax', '100');
   track.setAttribute('aria-valuenow', String(value));
-  track.setAttribute('aria-valuetext', `${label}, ${value} procent`);
+  track.setAttribute('aria-valuetext', t('progress.percentAria', { label, value }));
   $('progress-elapsed').textContent = `${value} %`;
 }
 
@@ -656,7 +714,7 @@ async function runOperation(path, body, label) {
   }
 
   if (!state.dockerReady) {
-    appendLog('Docker Desktop måste vara igång innan den här åtgärden kan köras.');
+    appendLog(t('log.dockerRequired'));
     return;
   }
 
@@ -672,12 +730,13 @@ async function runOperation(path, body, label) {
 
     if (result.output) {
       $('log').textContent = result.output;
+      $('log').dataset.placeholder = 'false';
     } else {
-      appendLog(result.ok ? 'Klart.' : 'Åtgärden misslyckades.');
+      appendLog(result.ok ? t('common.done') : t('log.actionFailed'));
     }
 
     if (!result.ok && result.error) {
-      appendLog(`Fel: ${result.error}`);
+      appendLog(t('log.errorPrefix', { error: result.error }));
     }
 
     if (result.status) {
@@ -686,7 +745,7 @@ async function runOperation(path, body, label) {
       await refresh(false);
     }
   } catch (error) {
-    appendLog(`Fel: ${error.message}`);
+    appendLog(t('log.errorPrefix', { error: error.message }));
   } finally {
     stopProgress();
     setBusy(false);
@@ -695,12 +754,12 @@ async function runOperation(path, body, label) {
 
 function install() {
   if (!state.dockerReady) {
-    appendLog('Docker Desktop måste vara igång innan agenten kan installeras.');
+    appendLog(t('log.dockerRequiredInstall'));
     return;
   }
 
   const dataDir = $('data-dir').value.trim();
-  runOperation('/api/install', { dataDir }, 'Installerar och startar agenten');
+  runOperation('/api/install', { dataDir }, t('log.installLabel'));
 }
 
 $('install').addEventListener('click', install);
@@ -712,14 +771,14 @@ async function runPanelUpdate() {
     return;
   }
 
-  if (!window.confirm('Ladda ner ny panelversion nu? Panelen startar om när filen är utbytt.')) {
+  if (!window.confirm(t('update.confirm'))) {
     return;
   }
 
   setBusy(true);
   state.updating = true;
-  startProgress('Laddar ner ny panelversion');
-  $('update-text').textContent = 'Laddar ner och kontrollerar den nya versionen…';
+  startProgress(t('update.downloadLabel'));
+  $('update-text').textContent = t('update.downloadingText');
   $('update-now').hidden = true;
   const progressPoll = window.setInterval(refreshDownloadProgress, 400);
 
@@ -727,19 +786,23 @@ async function runPanelUpdate() {
     const result = await api('/api/panel-update', { method: 'POST', body: '{}' });
     if (!result.ok) {
       state.updating = false;
-      $('update-text').textContent = result.error ?? 'Uppdateringen misslyckades.';
+      $('update-text').textContent = result.error ?? t('update.failed');
       $('update-now').hidden = false;
-      appendLog(`Uppdateringen misslyckades: ${result.error ?? 'okänt fel'}`);
+      appendLog(`\n> ${t('log.errorPrefix', {
+        error: result.error ?? t('update.unknownError'),
+      })}`);
       return;
     }
 
     $('update-dot').className = 'dot dot-ok';
-    $('update-title').textContent = `Panel ${versionLabel(result.version)} är installerad`;
-    $('update-text').textContent = 'Panelen startar om…';
-    appendLog(`Panel ${versionLabel(result.version)} installerad. Panelen startar om.`);
+    $('update-title').textContent = t('update.installedTitle', {
+      version: versionLabel(result.version),
+    });
+    $('update-text').textContent = t('update.restarting');
+    appendLog(t('update.installedLog', { version: versionLabel(result.version) }));
   } catch (error) {
     state.updating = false;
-    $('update-text').textContent = `Uppdateringen misslyckades: ${error.message}`;
+    $('update-text').textContent = t('update.failedWith', { error: error.message });
     $('update-now').hidden = false;
   } finally {
     window.clearInterval(progressPoll);
@@ -761,12 +824,11 @@ $('show-log').addEventListener('click', () => selectTab('log'));
 // Städar bort servercontainrar som inte körs. Servernas filer ligger kvar på
 // disken, så en start i mastern skapar en ny container med samma data.
 $('prune-servers').addEventListener('click', () => {
-  const message = 'Ta bort de stoppade servercontainrarna? Servernas filer ligger kvar på disken.';
-  if (!window.confirm(message)) {
+  if (!window.confirm(t('log.pruneConfirm'))) {
     return;
   }
 
-  runOperation('/api/servers/prune', {}, 'Rensar stoppade servercontainrar');
+  runOperation('/api/servers/prune', {}, t('log.pruneLabel'));
 });
 
 $('startup').addEventListener('change', async () => {
@@ -777,24 +839,24 @@ $('startup').addEventListener('change', async () => {
       body: JSON.stringify({ enabled }),
     });
     if (!result.ok) {
-      throw new Error(result.error || 'Kunde inte ändra automatisk start.');
+      throw new Error(result.error || t('log.startupChangeFailed'));
     }
-    appendLog(enabled ? 'Panelen startar med Windows.' : 'Automatisk start avstängd.');
+    appendLog(enabled ? t('log.startupOn') : t('log.startupOff'));
   } catch (error) {
     $('startup').checked = !enabled;
-    appendLog(`Kunde inte ändra automatisk start: ${error.message}`);
+    appendLog(t('log.startupFailedWith', { error: error.message }));
   }
 });
 
 $('update').addEventListener('click', () => {
-  runOperation('/api/update', null, 'Hämtar senaste agentimagen');
+  runOperation('/api/update', null, t('log.pullLabel'));
 });
 
 $('stop').addEventListener('click', () => {
-  if (!window.confirm('Stoppa agenten? Servrarna behålls och kan startas igen senare.')) {
+  if (!window.confirm(t('log.stopConfirm'))) {
     return;
   }
-  runOperation('/api/stop', null, 'Stoppar agenten');
+  runOperation('/api/stop', null, t('log.stopLabel'));
 });
 
 $('cancel').addEventListener('click', async () => {
@@ -804,24 +866,24 @@ $('cancel').addEventListener('click', async () => {
 
   try {
     const result = await api('/api/cancel', { method: 'POST', body: '{}' });
-    appendLog(result.ok ? 'Avbryter den pågående åtgärden…' : 'Ingen pågående åtgärd att avbryta.');
+    appendLog(result.ok ? t('log.cancelling') : t('log.nothingToCancel'));
   } catch (error) {
-    appendLog(`Kunde inte avbryta: ${error.message}`);
+    appendLog(t('log.cancelFailed', { error: error.message }));
   }
 });
 
 $('remove').addEventListener('click', () => {
-  if (!window.confirm('Ta bort agenten från datorn? Containern tas bort och agenten kopplas bort från noden. Serverdata och agentens state ligger kvar.')) {
+  if (!window.confirm(t('log.removeConfirm'))) {
     return;
   }
-  runOperation('/api/remove', null, 'Tar bort agenten');
+  runOperation('/api/remove', null, t('log.removeLabel'));
 });
 
 $('open-folder').addEventListener('click', async () => {
   try {
     await api('/api/open-folder', { method: 'POST', body: '{}' });
   } catch (error) {
-    appendLog(`Kunde inte öppna mappen: ${error.message}`);
+    appendLog(t('log.openFolderFailed', { error: error.message }));
   }
 });
 
@@ -834,16 +896,15 @@ $('copy-claim').addEventListener('click', async () => {
   try {
     await navigator.clipboard.writeText(code);
     const button = $('copy-claim');
-    const previous = button.textContent;
-    button.textContent = 'Kopierad';
-    window.setTimeout(() => { button.textContent = previous; }, 1400);
+    button.textContent = t('button.copied');
+    window.setTimeout(() => { button.textContent = t('action.copy'); }, 1400);
   } catch {
-    appendLog('Kunde inte kopiera automatiskt. Markera koden manuellt.');
+    appendLog(t('log.copyFailed'));
   }
 });
 
 $('quit').addEventListener('click', async () => {
-  if (!window.confirm('Stäng panelen? Agenten fortsätter köra i Docker.')) {
+  if (!window.confirm(t('log.quitConfirm'))) {
     return;
   }
 
@@ -855,7 +916,9 @@ $('quit').addEventListener('click', async () => {
   window.close();
 });
 
+i18n.setLanguage(i18n.detect());
 setupTabs();
+setupLanguage();
 refresh(true);
 checkVersion();
 window.setInterval(() => {
