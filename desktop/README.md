@@ -40,6 +40,15 @@ uppmaning att starta Docker Desktop. Inga compose-filer skrivs förrän Docker �
 5. Statuskorten ska bli gröna för Docker, master och agent. Efter slutförd anslutning visar
    panelen **Redan ansluten** i stället för en ny kod.
 
+## Språk (svenska och engelska)
+
+Panelens gränssnitt finns på svenska och engelska. Byt språk under **Inställningar → Språk**;
+texterna byts direkt och valet sparas i panelens `localStorage` för nästa start. Första gången
+följer panelen Windows språk om det är svenska eller engelska, annars svenska.
+
+Panelens egna texter, knappar och dialogrutor översätts. Meddelanden som agenten eller panelens
+C#-del skriver — detaljerade feltexter och själva agentloggen — är kvar på svenska.
+
 ## Översiktens statistik och nodnamn
 
 Överst i **Översikt** står nodens namn och datorns resursläge: antal servrar (körda av totalt),

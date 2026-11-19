@@ -73,6 +73,13 @@ app.MapGet("/app.js", (HttpContext context) =>
     return Results.Content(ReadResource("wwwroot.app.js"), "text/javascript; charset=utf-8", Encoding.UTF8);
 });
 
+// Panelens svenska och engelska texter.
+app.MapGet("/i18n.js", (HttpContext context) =>
+{
+    context.Response.Headers.CacheControl = "no-store";
+    return Results.Content(ReadResource("wwwroot.i18n.js"), "text/javascript; charset=utf-8", Encoding.UTF8);
+});
+
 app.MapGet("/api/status", async (AgentSetupService service, CancellationToken ct) =>
     Results.Ok(await service.GetStatusAsync(ct)));
 

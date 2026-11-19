@@ -6,6 +6,7 @@
   <meta name="cp-token" content="__CRAFT_PILOT_TOKEN__">
   <title>CraftPilot – Runtime Agent</title>
   <link rel="stylesheet" href="/app.css">
+  <script src="/i18n.js"></script>
 </head>
 <body>
   <div class="glow glow-one" aria-hidden="true"></div>
@@ -21,33 +22,34 @@
         </span>
       </a>
       <div class="topbar-meta">
-        <span class="version-pill" id="panel-version" title="Panelversion">v…</span>
+        <span class="version-pill" id="panel-version" title="Panelversion" data-i18n-title="version.panelLabel">v…</span>
         <div class="local-pill">
           <span class="dot dot-ok"></span>
-          Lokal panel
+          <span data-i18n="localPanel">Lokal panel</span>
         </div>
       </div>
     </header>
 
-    <nav class="tabs" role="tablist" aria-label="Panelsektioner">
+    <nav class="tabs" role="tablist" aria-label="Panelsektioner" data-i18n-aria-label="tabs.label">
       <button class="tab" id="tab-button-main" type="button" role="tab"
-              aria-controls="tab-main" aria-selected="true" tabindex="0">Översikt</button>
+              aria-controls="tab-main" aria-selected="true" tabindex="0" data-i18n="tab.main">Översikt</button>
       <button class="tab" id="tab-button-settings" type="button" role="tab"
-              aria-controls="tab-settings" aria-selected="false" tabindex="-1">Inställningar</button>
+              aria-controls="tab-settings" aria-selected="false" tabindex="-1" data-i18n="tab.settings">Inställningar</button>
       <button class="tab" id="tab-button-log" type="button" role="tab"
-              aria-controls="tab-log" aria-selected="false" tabindex="-1">Logg</button>
+              aria-controls="tab-log" aria-selected="false" tabindex="-1" data-i18n="tab.log">Logg</button>
     </nav>
 
     <div class="progress" id="progress" hidden>
       <div class="progress-head">
-        <span class="progress-label" id="progress-label">Arbetar…</span>
+        <span class="progress-label" id="progress-label" data-i18n="common.working">Arbetar…</span>
         <div class="progress-meta">
           <span id="progress-elapsed">0 s</span>
-          <button class="button button-link" id="show-log" type="button">Visa logg</button>
+          <button class="button button-link" id="show-log" type="button" data-i18n="progress.showLog">Visa logg</button>
         </div>
       </div>
       <div class="progress-track" id="progress-track" role="progressbar"
-           aria-label="Åtgärd pågår" aria-valuetext="Pågår">
+           aria-label="Åtgärd pågår" aria-valuetext="Pågår"
+           data-i18n-aria-label="progress.ariaLabel" data-i18n-aria-valuetext="progress.ariaValue">
         <div class="progress-fill"></div>
       </div>
     </div>
@@ -56,50 +58,50 @@
       <section class="tab-panel" id="tab-main" role="tabpanel" aria-labelledby="tab-button-main">
         <section class="overview-head">
           <div class="overview-copy">
-            <h1 id="node-title">Den här noden</h1>
+            <h1 id="node-title" data-i18n="overview.thisNode">Den här noden</h1>
             <p class="hero-meta" id="node-meta">—</p>
           </div>
           <div class="hero-actions">
             <button class="button button-quiet" id="refresh" type="button">
               <span class="button-icon" aria-hidden="true">↻</span>
-              Kontrollera igen
+              <span data-i18n="action.refresh">Kontrollera igen</span>
             </button>
-            <button class="button button-primary" id="install" type="button">
+            <button class="button button-primary" id="install" type="button" data-i18n="action.install">
               Installera / starta
             </button>
           </div>
         </section>
 
-        <section class="stats-grid" aria-label="Nodstatistik">
+        <section class="stats-grid" aria-label="Nodstatistik" data-i18n-aria-label="stats.label">
           <article class="stat-card">
-            <span class="stat-label">Servrar</span>
+            <span class="stat-label" data-i18n="stats.servers">Servrar</span>
             <strong class="stat-value" id="stat-servers">0/0</strong>
             <span class="stat-hint" id="stat-servers-hint">—</span>
           </article>
           <article class="stat-card">
-            <span class="stat-label">Spelare</span>
+            <span class="stat-label" data-i18n="stats.players">Spelare</span>
             <strong class="stat-value" id="stat-players">—</strong>
             <span class="stat-hint" id="stat-players-hint">—</span>
           </article>
           <article class="stat-card">
-            <span class="stat-label">Minne</span>
+            <span class="stat-label" data-i18n="stats.memory">Minne</span>
             <strong class="stat-value" id="stat-memory">—</strong>
             <span class="stat-hint" id="stat-memory-hint">—</span>
           </article>
           <article class="stat-card">
-            <span class="stat-label">Disk</span>
+            <span class="stat-label" data-i18n="stats.disk">Disk</span>
             <strong class="stat-value" id="stat-disk">—</strong>
             <span class="stat-hint" id="stat-disk-hint">—</span>
           </article>
           <article class="stat-card">
-            <span class="stat-label">Nätverk</span>
+            <span class="stat-label" data-i18n="stats.network">Nätverk</span>
             <strong class="stat-value" id="stat-network">—</strong>
             <span class="stat-hint" id="stat-network-hint">—</span>
           </article>
           <article class="stat-card">
-            <span class="stat-label">Panel</span>
+            <span class="stat-label" data-i18n="stats.panel">Panel</span>
             <strong class="stat-value" id="stat-panel">v…</strong>
-            <span class="stat-hint" id="stat-panel-hint">Kontrollerar</span>
+            <span class="stat-hint" id="stat-panel-hint" data-i18n="common.checking">Kontrollerar</span>
           </article>
         </section>
 
@@ -107,72 +109,72 @@
           <div class="update-copy">
             <span class="dot dot-warn" id="update-dot" aria-hidden="true"></span>
             <div>
-              <strong id="update-title">Ny panelversion finns</strong>
+              <strong id="update-title" data-i18n="update.title">Ny panelversion finns</strong>
               <p id="update-text"></p>
             </div>
           </div>
-          <button type="button" class="button button-primary" id="update-now" hidden>
+          <button type="button" class="button button-primary" id="update-now" hidden data-i18n="action.download">
             Ladda ner
           </button>
-          <a class="button button-quiet" id="update-link" href="#" target="_blank" rel="noopener" hidden>
+          <a class="button button-quiet" id="update-link" href="#" target="_blank" rel="noopener" hidden data-i18n="action.openRelease">
             Öppna releasen
           </a>
         </section>
 
         <div class="notice" id="docker-notice" role="status" aria-live="polite" hidden>
           <div class="notice-copy">
-            <strong id="docker-notice-title">Docker Desktop krävs</strong>
+            <strong id="docker-notice-title" data-i18n="docker.noticeTitle">Docker Desktop krävs</strong>
             <p id="docker-notice-text"></p>
           </div>
           <a class="notice-link" id="docker-download" href="https://www.docker.com/products/docker-desktop/" target="_blank" rel="noopener" hidden>
-            Hämta Docker Desktop <span aria-hidden="true">↗</span>
+            <span data-i18n="docker.download">Hämta Docker Desktop</span> <span aria-hidden="true">↗</span>
           </a>
         </div>
 
-        <section class="status-grid" aria-label="Systemstatus">
+        <section class="status-grid" aria-label="Systemstatus" data-i18n-aria-label="status.label">
           <article class="status-card" id="docker-card">
             <div class="card-head">
               <span class="dot dot-idle" id="docker-dot" aria-hidden="true"></span>
-              <span class="card-label">Docker</span>
-              <span class="badge badge-idle" id="docker-badge">Kontrollerar</span>
+              <span class="card-label" data-i18n="label.docker">Docker</span>
+              <span class="badge badge-idle" id="docker-badge" data-i18n="common.checking">Kontrollerar</span>
             </div>
-            <p class="card-value" id="docker-value">Kontrollerar…</p>
+            <p class="card-value" id="docker-value" data-i18n="common.checkingEllipsis">Kontrollerar…</p>
             <a class="card-link" id="docker-link" href="https://www.docker.com/products/docker-desktop/" target="_blank" rel="noopener" hidden>
-              Hämta Docker Desktop <span aria-hidden="true">↗</span>
+              <span data-i18n="docker.download">Hämta Docker Desktop</span> <span aria-hidden="true">↗</span>
             </a>
           </article>
 
           <article class="status-card" id="master-card">
             <div class="card-head">
               <span class="dot dot-idle" id="master-dot" aria-hidden="true"></span>
-              <span class="card-label">Master</span>
-              <span class="badge badge-idle" id="master-badge">Kontrollerar</span>
+              <span class="card-label" data-i18n="label.master">Master</span>
+              <span class="badge badge-idle" id="master-badge" data-i18n="common.checking">Kontrollerar</span>
             </div>
-            <p class="card-value" id="master-value">Kontrollerar…</p>
+            <p class="card-value" id="master-value" data-i18n="common.checkingEllipsis">Kontrollerar…</p>
             <a class="card-link" id="master-link" href="https://craftpilot.se/node" target="_blank" rel="noopener">
-              Öppna Min nod <span aria-hidden="true">↗</span>
+              <span data-i18n="master.openNode">Öppna Min nod</span> <span aria-hidden="true">↗</span>
             </a>
           </article>
 
           <article class="status-card" id="agent-card">
             <div class="card-head">
               <span class="dot dot-idle" id="agent-dot" aria-hidden="true"></span>
-              <span class="card-label">Agent</span>
-              <span class="badge badge-idle" id="agent-badge">Kontrollerar</span>
+              <span class="card-label" data-i18n="label.agent">Agent</span>
+              <span class="badge badge-idle" id="agent-badge" data-i18n="common.checking">Kontrollerar</span>
             </div>
-            <p class="card-value" id="agent-value">Kontrollerar…</p>
+            <p class="card-value" id="agent-value" data-i18n="common.checkingEllipsis">Kontrollerar…</p>
           </article>
 
           <article class="status-card status-card-claim" id="claim-card">
             <div class="card-head">
               <span class="dot dot-idle" id="claim-dot" aria-hidden="true"></span>
-              <span class="card-label">Anslutning</span>
-              <span class="badge badge-idle" id="claim-badge">Väntar</span>
+              <span class="card-label" data-i18n="label.claim">Anslutning</span>
+              <span class="badge badge-idle" id="claim-badge" data-i18n="common.waiting">Väntar</span>
             </div>
-            <p class="card-value" id="claim-value">Väntar</p>
+            <p class="card-value" id="claim-value" data-i18n="common.waiting">Väntar</p>
             <div class="claim-row">
               <code id="claim-code">—</code>
-              <button class="copy-button" id="copy-claim" type="button" disabled>Kopiera</button>
+              <button class="copy-button" id="copy-claim" type="button" disabled data-i18n="action.copy">Kopiera</button>
             </div>
           </article>
         </section>
@@ -180,15 +182,15 @@
         <section class="panel servers-panel" aria-labelledby="servers-title">
           <div class="panel-head">
             <div>
-              <p class="eyebrow">Servrar</p>
-              <h2 id="servers-title">Servrar på den här noden</h2>
+              <p class="eyebrow" data-i18n="servers.eyebrow">Servrar</p>
+              <h2 id="servers-title" data-i18n="servers.title">Servrar på den här noden</h2>
             </div>
             <div class="panel-actions">
-              <button class="button button-quiet" id="prune-servers" type="button" hidden>Rensa stoppade</button>
+              <button class="button button-quiet" id="prune-servers" type="button" hidden data-i18n="servers.prune">Rensa stoppade</button>
               <span class="badge badge-idle" id="servers-count">0</span>
             </div>
           </div>
-          <p class="server-empty" id="servers-empty">Inga servrar ännu.</p>
+          <p class="server-empty" id="servers-empty" data-i18n="servers.empty">Inga servrar ännu.</p>
           <ul class="server-list" id="servers-list" hidden></ul>
         </section>
       </section>
@@ -197,8 +199,8 @@
         <section class="panel" aria-labelledby="settings-title">
           <div class="panel-head">
             <div>
-              <p class="eyebrow">Inställningar</p>
-              <h2 id="settings-title">Var serverna ska ligga</h2>
+              <p class="eyebrow" data-i18n="tab.settings">Inställningar</p>
+              <h2 id="settings-title" data-i18n="settings.title">Var serverna ska ligga</h2>
             </div>
             <span class="muted" id="settings-note">Master låst</span>
           </div>
@@ -212,36 +214,45 @@
               </div>
             </div>
             <label class="field">
-              <span>Serverdata på datorn</span>
+              <span data-i18n="settings.dataDir">Serverdata på datorn</span>
               <input id="data-dir" type="text" spellcheck="false" autocomplete="off"
-                     placeholder="C:\Users\du\CraftPilot\servers">
+                     placeholder="C:\Users\du\CraftPilot\servers" data-i18n-placeholder="settings.dataDirPlaceholder">
             </label>
           </div>
 
           <p class="hint">
-            Agenten ansluter alltid till <code>https://craftpilot.se</code>. Serverdata är mappen där agenten skapar och kör dina servrar.
-            Rust-agenten kör servrarna som Docker-containrar, så Docker Desktop måste vara igång – det finns ingen Docker-fri start.
+            <span data-i18n="settings.hintBefore">Agenten ansluter alltid till </span><code>https://craftpilot.se</code><span data-i18n="settings.hintAfter">. Serverdata är mappen där agenten skapar och kör dina servrar.
+            Rust-agenten kör servrarna som Docker-containrar, så Docker Desktop måste vara igång – det finns ingen Docker-fri start.</span>
           </p>
 
+          <label class="field field-language" for="language">
+            <span data-i18n="settings.language">Språk</span>
+            <select id="language" name="language">
+              <option value="sv">Svenska</option>
+              <option value="en">English</option>
+            </select>
+          </label>
+          <p class="hint hint-tight" data-i18n="settings.languageHint">Panelen byter språk direkt.</p>
+
           <div class="actions">
-            <button class="button button-primary" id="install-panel" type="button">Installera / starta</button>
-            <button class="button button-quiet" id="update" type="button">Uppdatera</button>
-            <button class="button button-quiet button-danger" id="stop" type="button">Stoppa</button>
-            <button class="button button-quiet" id="cancel" type="button" disabled>Avbryt</button>
-            <button class="button button-quiet button-danger" id="remove" type="button">Ta bort</button>
-            <button class="button button-link" id="open-folder" type="button">Öppna installationsmapp</button>
+            <button class="button button-primary" id="install-panel" type="button" data-i18n="action.install">Installera / starta</button>
+            <button class="button button-quiet" id="update" type="button" data-i18n="action.update">Uppdatera</button>
+            <button class="button button-quiet button-danger" id="stop" type="button" data-i18n="action.stop">Stoppa</button>
+            <button class="button button-quiet" id="cancel" type="button" disabled data-i18n="action.cancel">Avbryt</button>
+            <button class="button button-quiet button-danger" id="remove" type="button" data-i18n="action.remove">Ta bort</button>
+            <button class="button button-link" id="open-folder" type="button" data-i18n="action.openFolder">Öppna installationsmapp</button>
           </div>
 
           <label class="check-row" for="startup">
             <input id="startup" type="checkbox">
             <span>
-              <strong>Starta med Windows</strong>
-              <small>Panelen startar i trayen när du loggar in.</small>
+              <strong data-i18n="settings.startupTitle">Starta med Windows</strong>
+              <small data-i18n="settings.startupHint">Panelen startar i trayen när du loggar in.</small>
             </span>
           </label>
 
           <p class="path-line">
-            Installationsfiler: <code id="install-dir">—</code>
+            <span data-i18n="settings.installFiles">Installationsfiler: </span><code id="install-dir">—</code>
           </p>
         </section>
       </section>
@@ -250,10 +261,10 @@
         <section class="panel log-panel" aria-labelledby="log-title">
           <div class="panel-head">
             <div>
-              <p class="eyebrow">Senaste händelser</p>
-              <h2 id="log-title">Logg</h2>
+              <p class="eyebrow" data-i18n="log.eyebrow">Senaste händelser</p>
+              <h2 id="log-title" data-i18n="log.title">Logg</h2>
             </div>
-            <button class="button button-link" id="load-logs" type="button">Visa agentlogg</button>
+            <button class="button button-link" id="load-logs" type="button" data-i18n="log.showAgentLog">Visa agentlogg</button>
           </div>
           <pre id="log" class="log" aria-live="polite">Startar panelen…</pre>
         </section>
@@ -261,12 +272,12 @@
     </main>
 
     <footer class="footer">
-      <span>Panelen körs bara på den här datorn.</span>
-      <button class="footer-quit" id="quit" type="button">Stäng panelen</button>
+      <span data-i18n="footer.local">Panelen körs bara på den här datorn.</span>
+      <button class="footer-quit" id="quit" type="button" data-i18n="footer.quit">Stäng panelen</button>
     </footer>
   </div>
 
-  <noscript>JavaScript måste vara aktiverat för att panelen ska fungera.</noscript>
+  <noscript data-i18n="noscript">JavaScript måste vara aktiverat för att panelen ska fungera.</noscript>
   <script src="/app.js"></script>
 </body>
 </html>
