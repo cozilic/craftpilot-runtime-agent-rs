@@ -1192,6 +1192,11 @@ impl Agent {
             if let Some(value) = sample.artifact_present {
                 report.insert("artifact_present".into(), json!(value));
             }
+            insert_network_counters(
+                &mut report,
+                sample.network_rx_bytes,
+                sample.network_tx_bytes,
+            );
             if !sample.logs.is_empty() {
                 let logs: Vec<Value> = sample
                     .logs
@@ -1228,6 +1233,22 @@ impl Agent {
         self.store.save()?;
         self.api.set_credential(None);
         Ok(())
+    }
+}
+
+/// Nätverksräknarna (2026-11-20): containerns kumulativa byte, aldrig en
+/// hastighet. Ett fält som inte kunde läsas utelämnas — mastern tolkar det
+/// som `null` och visar `—` i stället för att hitta på en siffra.
+fn insert_network_counters(
+    report: &mut serde_json::Map<String, Value>,
+    rx: Option<u64>,
+    tx: Option<u64>,
+) {
+    if let Some(value) = rx {
+        report.insert("network_rx_bytes".into(), json!(value));
+    }
+    if let Some(value) = tx {
+        report.insert("network_tx_bytes".into(), json!(value));
     }
 }
 
@@ -1327,13 +1348,47 @@ fn deletable_server_data(root: &Path, server_id: &str) -> Result<Option<PathBuf>
 mod tests {
     use std::path::PathBuf;
 
-    use super::{deletable_server_data, needs_new_credential, sha256_hex, unix_seconds, Agent};
+    use super::{
+        deletable_server_data, insert_network_counters, needs_new_credential, sha256_hex,
+        unix_seconds, Agent,
+    };
     use crate::config::Config;
     use crate::error::AgentError;
     use crate::state::{Enrollment, StateStore};
+    use serde_json::Value;
+
     use crate::test_master::{
         FakeMaster, NEW_CLAIM_CODE, NEW_CREDENTIAL, NEW_REQUEST_ID, REFRESHED_CLAIM_CODE,
     };
+
+    /// Räknarna skickas som råa heltal i byte. Inga `*_bps`-fält och inga
+    /// formaterade strängar: mastern räknar hastigheten själv.
+    #[test]
+    fn the_report_carries_raw_network_counters_only() {
+        let mut report = serde_json::Map::new();
+        insert_network_counters(&mut report, Some(1_234_567), Some(89_000));
+
+        assert_eq!(
+            report.get("network_rx_bytes").and_then(Value::as_u64),
+            Some(1_234_567)
+        );
+        assert_eq!(
+            report.get("network_tx_bytes").and_then(Value::as_u64),
+            Some(89_000)
+        );
+        assert!(report.keys().all(|key| !key.ends_with("_bps")));
+        assert!(report.values().all(Value::is_u64));
+    }
+
+    /// Utan mätning utelämnas fälten helt; mastern visar då `—` i stället för
+    /// en nolla som ser ut som mätt trafik.
+    #[test]
+    fn absent_network_counters_are_omitted() {
+        let mut report = serde_json::Map::new();
+        insert_network_counters(&mut report, None, None);
+
+        assert!(report.is_empty());
+    }
 
     /// En nod som tagits bort i panelen svarar 401 på nästa heartbeat. Det ska
     /// leda till en ny enrollment — inte till att agenten dör med den sparade

@@ -62,7 +62,9 @@ the Python agent — no master changes are required to run it side by side.
 - **TELEMETRY** (`servers` + `servers/report`): every 30 s, and immediately after a start/stop,
   the agent reports its assigned servers: status from `docker inspect` (missing → `OFFLINE`,
   running → `ONLINE`, exited 0 → `OFFLINE`, non-zero → `CRASHED`), CPU/memory from
-  `docker stats --no-stream`, `players_max` from `server.properties` (`max-players`, default 20),
+  `docker stats --no-stream`, raw network counters (`network_rx_bytes`/`network_tx_bytes`) from the
+  Docker Engine API `/containers/{id}/stats` summed over every interface (the CLI's `NetIO` is
+  rounded, so it cannot be used; a stopped container sends no counters at all), `players_max` from `server.properties` (`max-players`, default 20),
   `players_online` from join/leave console lines, `disk_used_mb` from a recursive walk of the
   server directory (cached for five minutes, symlinks are never followed), `artifact_present`
   from the jar name and minimum size the master lists in `artifacts`, and new console lines from
@@ -212,7 +214,8 @@ stable semantic-version tag such as `v0.2.0` publishes `0.2.0`, `0.2`, `0`, `sha
 `latest` to `ghcr.io/cozilic/craftpilot-runtime-agent-rs`. A manual run requires an explicit
 version and publishes that tag plus the commit tag.
 
-START/STOP require the Docker socket, the game network and the server data root:
+START/STOP require the Docker socket, the game network and the server data root. Telemetry also
+reads the socket, for the container's network counters:
 
 ```sh
 docker run -d --name craftpilot-runtime-agent-rs \
