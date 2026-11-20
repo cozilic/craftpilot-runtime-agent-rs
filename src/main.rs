@@ -3,6 +3,7 @@ mod api;
 mod build_info;
 mod config;
 mod docker;
+mod docker_api;
 mod error;
 mod file_tree;
 mod files;

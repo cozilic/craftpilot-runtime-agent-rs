@@ -8,6 +8,7 @@ use tokio::process::Command as ProcessCommand;
 use tokio::time::{sleep, timeout};
 use tracing::{info, warn};
 
+use crate::docker_api::DockerApi;
 use crate::error::{AgentError, Result};
 use crate::rcon::{self, RconSettings};
 
@@ -26,6 +27,9 @@ pub struct Docker {
     network: String,
     allowed_images: BTreeSet<String>,
     stop_grace_seconds: u64,
+    /// Rå nätverksdata ur Docker Engine API (2026-11-20). CLI:t räcker inte
+    /// för räknarna, se `docker_api`.
+    api: DockerApi,
 }
 
 pub struct StartOutcome {
@@ -65,6 +69,7 @@ impl Docker {
             network,
             allowed_images: allowed_images.into_iter().collect(),
             stop_grace_seconds,
+            api: DockerApi::from_env(),
         }
     }
 
@@ -406,6 +411,15 @@ impl Docker {
             memory_used_mb: memory.and_then(|value| memory_pair(value).0),
             memory_limit_mb: memory.and_then(|value| memory_pair(value).1),
         }))
+    }
+
+    /// Containerns kumulativa nätverksräknare (2026-11-20), summerade över
+    /// alla interface. `docker stats`-CLI:t avrundar `NetIO`, så räknarna
+    /// läses ur Docker Engine API i stället. Samma container som `stats`
+    /// läser: namnet mastern tilldelat servern. Ett fel ger tomma värden och
+    /// stoppar aldrig rapporten.
+    pub async fn network_counters(&self, server_id: &str) -> (Option<u64>, Option<u64>) {
+        self.api.container_net_io(&container_name(server_id)).await
     }
 
     /// Nya konsolrader med Docker-tidsstämpel. En saknad container ger en

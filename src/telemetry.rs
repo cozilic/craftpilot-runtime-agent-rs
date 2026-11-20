@@ -35,6 +35,10 @@ pub struct Sample {
     pub players_online: Option<i64>,
     pub players_max: Option<i64>,
     pub disk_used_mb: Option<u64>,
+    /// Kundens kumulativa nätverksräknare (2026-11-20); `None` när servern
+    /// inte kör eller daemonen inte kunde svara.
+    pub network_rx_bytes: Option<u64>,
+    pub network_tx_bytes: Option<u64>,
     pub artifact_present: Option<bool>,
     pub logs: Vec<(String, String)>,
     /// Senaste sedda loggtidsstämpeln, att spara som nästa `since`.
@@ -65,10 +69,18 @@ impl Reporter {
             Some(_) => "CRASHED",
         };
 
-        let stats = if matches!(status, "ONLINE") {
+        let online = status == "ONLINE";
+        let stats = if online {
             docker.stats(server_id).await?
         } else {
             None
+        };
+        // Räknarna läses bara medan containern kör: en stoppad container
+        // svarar med nollor som ser ut som en mätning.
+        let (network_rx_bytes, network_tx_bytes) = if online {
+            docker.network_counters(server_id).await
+        } else {
+            (None, None)
         };
         let uptime_seconds = state
             .as_ref()
@@ -115,6 +127,8 @@ impl Reporter {
             players_online: self.players.get(server_id).copied(),
             players_max: max_players(data_root, server_id),
             disk_used_mb,
+            network_rx_bytes,
+            network_tx_bytes,
             artifact_present,
             logs,
             cursor,
