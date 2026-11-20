@@ -2,7 +2,7 @@ name: craftpilot-agent
 
 services:
   agent:
-    image: ghcr.io/cozilic/craftpilot-runtime-agent-rs:0.6
+    image: ghcr.io/cozilic/craftpilot-runtime-agent-rs:0.10
     container_name: craftpilot-runtime-agent-rs
     restart: unless-stopped
     env_file:
