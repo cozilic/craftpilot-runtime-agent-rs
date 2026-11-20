@@ -64,6 +64,9 @@ Servrar som skapats i panelen men ännu inte startats listas också under **Serv
 noden**, med status **Inte startad**. De har en katalog i serverdata-mappen men ingen container
 ännu; **Rensa stoppade** rör dem inte.
 
+Serverraderna är klickbara: de öppnar servern i panelen i din vanliga webbläsare, där start, stopp
+och konsol finns.
+
 ## Tray och automatisk start
 
 Panelen har en tray-ikon som visar om Docker, mastern och agenten är redo. Stäng fönstret med
