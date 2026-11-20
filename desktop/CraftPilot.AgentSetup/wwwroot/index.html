@@ -234,6 +234,20 @@
           </label>
           <p class="hint hint-tight" data-i18n="settings.languageHint">Panelen byter språk direkt.</p>
 
+          <label class="field field-language" for="update-interval">
+            <span data-i18n="settings.updateCheck">Sök ny panelversion</span>
+            <select id="update-interval" name="update-interval">
+              <option value="daily" data-i18n="settings.updateDaily">En gång om dagen</option>
+              <option value="weekly" data-i18n="settings.updateWeekly">En gång i veckan</option>
+              <option value="manual" data-i18n="settings.updateManual">Bara manuellt</option>
+            </select>
+          </label>
+          <p class="hint hint-tight" data-i18n="settings.updateHint">Panelen frågar GitHub enligt valet ovan. Med Bara manuellt händer inget förrän du klickar på Kontrollera nu.</p>
+          <div class="update-check">
+            <button class="button button-quiet" id="check-update" type="button" data-i18n="settings.updateNow">Kontrollera nu</button>
+            <span class="muted" id="update-checked">—</span>
+          </div>
+
           <div class="actions">
             <button class="button button-primary" id="install-panel" type="button" data-i18n="action.install">Installera / starta</button>
             <button class="button button-quiet" id="update" type="button" data-i18n="action.update">Uppdatera</button>

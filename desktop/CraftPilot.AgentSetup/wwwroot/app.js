@@ -13,6 +13,7 @@ const state = {
   updating: false,
   status: null,
   version: null,
+  updateTimer: null,
 };
 
 async function api(path, options = {}) {
@@ -78,6 +79,8 @@ function imageTag(image) {
 
 function renderVersion(check) {
   state.version = check;
+  renderUpdateChecked(check);
+  scheduleUpdateCheck(check);
 
   const current = versionLabel(check.currentVersion);
   const pill = $('panel-version');
@@ -96,7 +99,9 @@ function renderVersion(check) {
     panelStat.textContent = current;
     $('stat-panel-hint').textContent = check.updateAvailable && check.latestVersion
       ? t('version.newAvailable', { version: versionLabel(check.latestVersion) })
-      : (check.error ? t('version.checkFailed') : t('version.latest'));
+      : (check.error
+        ? t('version.checkFailed')
+        : (check.checkedAt ? t('version.latest') : t('settings.neverChecked')));
   }
 
   if (check.updateAvailable && check.latestVersion && check.releaseUrl) {
@@ -129,11 +134,97 @@ function renderVersion(check) {
   $('update-now').hidden = true;
 }
 
-async function checkVersion() {
+async function checkVersion(force = false) {
   try {
-    renderVersion(await api('/api/version'));
+    renderVersion(force
+      ? await api('/api/version/check', { method: 'POST', body: '{}' })
+      : await api('/api/version'));
   } catch (error) {
     renderVersion({ error: t('version.readFailed', { error: error.message }) });
+    // Ett läst fel ska inte tystna för alltid: försök igen om tio minuter.
+    scheduleUpdateCheck({ nextCheckAt: new Date(Date.now() + 10 * 60 * 1000).toISOString() });
+  }
+}
+
+// När panelen själv frågar GitHub styrs av Inställningar. Servern räknar ut
+// nästa tillfälle, så panelen sover tills dess i stället för att polla.
+const UPDATE_INTERVALS = ['daily', 'weekly', 'manual'];
+const UPDATE_RECHECK_CAP_MS = 6 * 60 * 60 * 1000;
+
+function renderUpdateChecked(check) {
+  const label = $('update-checked');
+  if (!label || !check || !('checkedAt' in check)) {
+    return;
+  }
+
+  const checkedAt = check.checkedAt ? new Date(check.checkedAt) : null;
+  label.textContent = checkedAt && !Number.isNaN(checkedAt.getTime())
+    ? t('settings.checkedAt', {
+      when: checkedAt.toLocaleString(i18n.language === 'sv' ? 'sv-SE' : 'en-GB'),
+    })
+    : t('settings.neverChecked');
+}
+
+function scheduleUpdateCheck(check) {
+  if (state.updateTimer) {
+    window.clearTimeout(state.updateTimer);
+    state.updateTimer = null;
+  }
+
+  const next = check && check.nextCheckAt ? new Date(check.nextCheckAt).getTime() : NaN;
+  if (Number.isNaN(next)) {
+    return;
+  }
+
+  // En lång väntan kapas: servern avgör ändå om kontrollen är due, så
+  // panelen behöver inte sova ett dygn i ett öppet fönster.
+  const delay = Math.min(Math.max(next - Date.now(), 5000), UPDATE_RECHECK_CAP_MS);
+  state.updateTimer = window.setTimeout(() => checkVersion(), delay);
+}
+
+async function loadUpdateSetting() {
+  try {
+    const settings = await api('/api/settings');
+    const selector = $('update-interval');
+    if (selector && UPDATE_INTERVALS.includes(settings.updateCheckInterval)) {
+      selector.value = settings.updateCheckInterval;
+    }
+  } catch (error) {
+    appendLog(t('log.settingsReadFailed', { error: error.message }));
+  }
+}
+
+function setupUpdateSetting() {
+  const selector = $('update-interval');
+  if (selector) {
+    selector.addEventListener('change', async () => {
+      try {
+        await api('/api/settings', {
+          method: 'POST',
+          body: JSON.stringify({ updateCheckInterval: selector.value }),
+        });
+        appendLog(t('log.updateIntervalSaved', {
+          label: selector.options[selector.selectedIndex].textContent,
+        }));
+        await checkVersion();
+      } catch (error) {
+        appendLog(t('log.settingsSaveFailed', { error: error.message }));
+      }
+    });
+  }
+
+  const button = $('check-update');
+  if (button) {
+    button.addEventListener('click', async () => {
+      button.disabled = true;
+      button.textContent = t('settings.updateChecking');
+      try {
+        await checkVersion(true);
+      } finally {
+        button.disabled = false;
+        button.textContent = t('settings.updateNow');
+      }
+    });
   }
 }
 
@@ -933,7 +1024,9 @@ $('quit').addEventListener('click', async () => {
 i18n.setLanguage(i18n.detect());
 setupTabs();
 setupLanguage();
+setupUpdateSetting();
 refresh(true);
+loadUpdateSetting();
 checkVersion();
 window.setInterval(() => {
   if (!state.busy) {

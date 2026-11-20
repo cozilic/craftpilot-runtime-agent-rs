@@ -4,22 +4,49 @@ using System.Text.Json;
 
 namespace CraftPilot.AgentSetup;
 
+/// <summary>
+/// Läser panelens senaste release från GitHub. Hur ofta det görs styrs av
+/// intervallet i Inställningar ("daily", "weekly" eller "manual"), och tiden
+/// för den senaste kontrollen sparas, så en panel som ligger i trayen i dagar
+/// inte frågar GitHub varje gång sidan laddas om. Knappen Kontrollera nu går
+/// förbi både intervallet och cachen.
+/// </summary>
 public sealed class UpdateChecker
 {
     private const string LatestReleaseUrl =
         "https://api.github.com/repos/cozilic/craftpilot-runtime-agent-rs/releases/latest";
 
     private static readonly TimeSpan CacheDuration = TimeSpan.FromMinutes(10);
+    private static readonly TimeSpan ErrorRetryDelay = TimeSpan.FromMinutes(10);
     private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(5) };
 
+    private readonly PanelSettingsStore _store;
     private readonly SemaphoreSlim _gate = new(1, 1);
     private UpdateCheckResponse? _cached;
     private DateTimeOffset _cachedAt;
 
-    public async Task<UpdateCheckResponse> CheckAsync(CancellationToken ct = default)
+    public UpdateChecker(PanelSettingsStore store)
+    {
+        _store = store;
+    }
+
+    public Task<UpdateCheckResponse> CheckAsync(CancellationToken ct = default) =>
+        CheckAsync(false, ct);
+
+    public async Task<UpdateCheckResponse> CheckAsync(bool force, CancellationToken ct = default)
     {
         var current = PanelVersion.Current;
-        if (TryGetCached(current, out var cached))
+        var settings = _store.Load();
+        var interval = settings.UpdateCheckInterval;
+
+        // Inte due ännu: svara med det som redan är känt i stället för att
+        // fråga GitHub varje gång panelen ritar om sig.
+        if (!force && !UpdateCheckIntervals.IsDue(interval, settings.LastCheckedAt, DateTimeOffset.UtcNow))
+        {
+            return FromSettings(current, interval, settings);
+        }
+
+        if (!force && TryGetCached(current, out var cached))
         {
             return cached;
         }
@@ -27,24 +54,70 @@ public sealed class UpdateChecker
         await _gate.WaitAsync(ct);
         try
         {
-            if (TryGetCached(current, out cached))
+            if (!force && TryGetCached(current, out cached))
             {
                 return cached;
             }
 
             var result = await FetchAsync(current, ct);
-            if (result.Error is null)
+            if (result.Error is null && result.LatestVersion is not null)
             {
-                _cached = result;
-                _cachedAt = DateTimeOffset.UtcNow;
+                var saved = _store.SaveCheck(
+                    result.CheckedAt ?? DateTimeOffset.UtcNow,
+                    result.LatestVersion,
+                    result.ReleaseUrl);
+                var answered = result with
+                {
+                    UpdateCheckInterval = interval,
+                    NextCheckAt = NextCheck(interval, saved.LastCheckedAt),
+                };
+
+                _cached = answered;
+                _cachedAt = answered.CheckedAt ?? DateTimeOffset.UtcNow;
+                return answered;
             }
 
-            return result;
+            // Ett GitHub-fel sparas inte som en kontroll: nästa försök görs om
+            // inom tio minuter i stället för att vänta ett helt dygn.
+            return result with
+            {
+                UpdateCheckInterval = interval,
+                NextCheckAt = DateTimeOffset.UtcNow + ErrorRetryDelay,
+            };
         }
         finally
         {
             _gate.Release();
         }
+    }
+
+    /// <summary>Svaret när ingen ny kontroll är due — byggt ur sparad data.</summary>
+    private static UpdateCheckResponse FromSettings(
+        string current,
+        string interval,
+        PanelSettingsStore.Snapshot settings) => new()
+    {
+        CurrentVersion = current,
+        LatestVersion = settings.LatestVersion,
+        ReleaseUrl = settings.ReleaseUrl,
+        UpdateAvailable = settings.LatestVersion is not null &&
+            ReleaseVersion.IsNewer(settings.LatestVersion, current),
+        CheckedAt = settings.LastCheckedAt,
+        UpdateCheckInterval = interval,
+        NextCheckAt = NextCheck(interval, settings.LastCheckedAt),
+    };
+
+    /// <summary>Nästa automatiska kontroll, null när panelen bara kontrollerar manuellt.</summary>
+    private static DateTimeOffset? NextCheck(string interval, DateTimeOffset? lastCheckedAt)
+    {
+        var window = UpdateCheckIntervals.Window(interval);
+        if (window is null || lastCheckedAt is null)
+        {
+            return null;
+        }
+
+        var next = lastCheckedAt.Value + window.Value;
+        return next > DateTimeOffset.UtcNow ? next : DateTimeOffset.UtcNow;
     }
 
     private bool TryGetCached(string current, out UpdateCheckResponse result)
