@@ -67,6 +67,15 @@ noden**, med status **Inte startad**. De har en katalog i serverdata-mappen men 
 Serverraderna är klickbara: de öppnar servern i panelen i din vanliga webbläsare, där start, stopp
 och konsol finns.
 
+## Versionskontroll
+
+Panelen frågar GitHub efter en ny panelversion enligt valet i **Inställningar → Sök ny panelversion**:
+**En gång om dagen** (standard), **En gång i veckan** eller **Bara manuellt**. Valet och tiden för
+den senaste kontrollen sparas i `%LOCALAPPDATA%\CraftPilot\panel-settings.json`, så panelen minns
+dem efter en omstart. **Kontrollera nu** frågar GitHub direkt, oavsett intervall — det är också enda
+vägen när **Bara manuellt** är valt. Nästa automatiska kontroll räknas från den senaste kontrollen,
+inte från att panelen startade.
+
 ## Tray och automatisk start
 
 Panelen har en tray-ikon som visar om Docker, mastern och agenten är redo. Stäng fönstret med

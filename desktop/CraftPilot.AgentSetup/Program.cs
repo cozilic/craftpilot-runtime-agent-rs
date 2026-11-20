@@ -14,6 +14,7 @@ var startInTray = StartupRegistration.IsStartupInvocation(args);
 builder.WebHost.ConfigureKestrel(options => options.Listen(IPAddress.Loopback, 0));
 builder.Services.AddSingleton<SetupSession>();
 builder.Services.AddSingleton<AgentSetupService>();
+builder.Services.AddSingleton<PanelSettingsStore>();
 builder.Services.AddSingleton<UpdateChecker>();
 builder.Services.AddSingleton<PanelUpdater>();
 builder.Logging.ClearProviders();
@@ -92,7 +93,18 @@ app.MapPost("/api/install", async (
     CancellationToken ct) => Results.Ok(await service.InstallAsync(request, ct)));
 
 app.MapGet("/api/version", async (UpdateChecker checker, CancellationToken ct) =>
-    Results.Ok(await checker.CheckAsync(ct)));
+    Results.Ok(await checker.CheckAsync(false, ct)));
+
+// Knappen Kontrollera nu: frågar GitHub direkt, oavsett valt intervall.
+app.MapPost("/api/version/check", async (UpdateChecker checker, CancellationToken ct) =>
+    Results.Ok(await checker.CheckAsync(true, ct)));
+
+// Panelens egna inställningar (i dag intervallet för versionskontrollen).
+app.MapGet("/api/settings", (PanelSettingsStore store) =>
+    Results.Ok(new { updateCheckInterval = store.Load().UpdateCheckInterval }));
+
+app.MapPost("/api/settings", (SettingsRequest request, PanelSettingsStore store) =>
+    Results.Ok(new { updateCheckInterval = store.SaveInterval(request.UpdateCheckInterval).UpdateCheckInterval }));
 
 app.MapPost("/api/update", async (AgentSetupService service, CancellationToken ct) =>
     Results.Ok(await service.UpdateAsync(ct)));
@@ -278,4 +290,6 @@ namespace CraftPilot.AgentSetup
     public sealed record InstallRequest(string? MasterUrl, string? DataDir);
 
     public sealed record StartupRequest(bool Enabled);
+
+    public sealed record SettingsRequest(string? UpdateCheckInterval);
 }
