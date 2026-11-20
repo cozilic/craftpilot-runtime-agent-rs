@@ -2,6 +2,8 @@ const token = document.querySelector('meta[name="cp-token"]')?.content ?? '';
 const $ = (id) => document.getElementById(id);
 const i18n = window.CraftPilotI18n;
 const t = (key, params) => i18n.t(key, params);
+// Masterns adress: Min nod-kortet och serverraderna länkar dit.
+const PANEL_URL = 'https://craftpilot.se';
 const state = {
   busy: false,
   loaded: false,
@@ -383,7 +385,7 @@ function renderStatus(status) {
   }
 
   $('install-dir').textContent = status.installDir || '—';
-  $('master-link').href = 'https://craftpilot.se/node';
+  $('master-link').href = `${PANEL_URL}/node`;
   $('settings-note').textContent = status.busy ? t('common.working') : t('settings.masterLocked');
 
   renderServers(status);
@@ -563,6 +565,17 @@ function serverRow(server) {
   const item = document.createElement('li');
   item.className = 'server-row';
 
+  // Hela raden länkar till servern i panelen, där start, stopp och konsol
+  // finns — listan här visar bara vad noden hostar just nu.
+  const link = document.createElement('a');
+  link.className = 'server-link';
+  link.href = `${PANEL_URL}/servers/${encodeURIComponent(server.serverId)}`;
+  link.target = '_blank';
+  link.rel = 'noopener';
+  link.title = t('servers.openTitle', {
+    name: server.name || `Server ${server.shortId || server.serverId}`,
+  });
+
   const dot = document.createElement('span');
   dot.className = `dot dot-${info.kind}`;
   dot.setAttribute('aria-hidden', 'true');
@@ -586,7 +599,8 @@ function serverRow(server) {
   badge.className = `badge badge-${info.kind}`;
   badge.textContent = info.key ? t(info.key) : info.label;
 
-  item.append(dot, main, badge);
+  link.append(dot, main, badge);
+  item.append(link);
   return item;
 }
 
