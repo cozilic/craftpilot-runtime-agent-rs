@@ -9,6 +9,7 @@ mod file_tree;
 mod files;
 mod migrations;
 mod model;
+mod ping;
 mod rcon;
 mod snapshot;
 mod state;

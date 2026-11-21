@@ -118,13 +118,30 @@ impl Reporter {
             logs.drain(..logs.len() - LOG_WINDOW);
         }
 
+        // Server-list-ping är källan när servern svarar: konsolraderna
+        // räknar bara vanilla-engelska "joined/left the game" och tappar
+        // räkningen efter en omstart. Loggarna finns kvar som reserv medan
+        // servern fortfarande startar och porten inte svarar.
+        let players_online = if online {
+            let host = crate::docker::container_name(server_id);
+            match crate::ping::players_online(&host, crate::docker::MOUNT_PORT).await {
+                Some(count) => {
+                    self.players.insert(server_id.to_string(), count);
+                    Some(count)
+                }
+                None => self.players.get(server_id).copied(),
+            }
+        } else {
+            self.players.get(server_id).copied()
+        };
+
         Ok(Sample {
             status,
             cpu_percent: stats.as_ref().and_then(|stats| stats.cpu_percent),
             memory_used_mb: stats.as_ref().and_then(|stats| stats.memory_used_mb),
             memory_limit_mb: stats.as_ref().and_then(|stats| stats.memory_limit_mb),
             uptime_seconds,
-            players_online: self.players.get(server_id).copied(),
+            players_online,
             players_max: max_players(data_root, server_id),
             disk_used_mb,
             network_rx_bytes,
