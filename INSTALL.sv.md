@@ -81,8 +81,9 @@ På Windows visar panelen Docker-, master- och agentstatus samt claim-koden.
 
 ## Uppdatera agenten
 
-`compose.yaml`, `compose.desktop.yaml` och `setup.sh` pekar på den stabila taggen `0.7`, så noden
-följer 0.7.x-släppen i stället för varje push till `main`. Serverdata och state-volymen ligger kvar
+`compose.yaml` och `compose.desktop.yaml` pekar på den stabila taggen `0.10`, så noden följer
+0.10.x-släppen i stället för varje push till `main`. `scripts/check-version.sh` (som CI kör) fäller
+en ändring där Cargo, panelen, compose-filerna och dokumentationen pekar på olika versioner. Serverdata och state-volymen ligger kvar
 vid uppdatering.
 
 **Linux:**
@@ -93,7 +94,7 @@ sudo docker compose pull && sudo docker compose up -d
 ```
 
 En befintlig installation behåller sin compose-fil – `setup.sh` skriver inte över den – så byt
-`:main` mot `:0.7` där en gång innan du hämtar imagen.
+`:main` mot `:0.10` där en gång innan du hämtar imagen.
 
 Att köra `sudo ./setup.sh` igen gör samma sak.
 
@@ -101,7 +102,7 @@ Att köra `sudo ./setup.sh` igen gör samma sak.
 Panelen uppdateras separat genom att ladda ner `CraftPilot.AgentSetup.exe` från senaste release
 (bannern i panelen länkar dit).
 
-Ny minor-version (t.ex. 0.8): byt `:0.7` mot den nya taggen i `compose.yaml` respektive
+Ny minor-version (t.ex. 0.11): byt `:0.10` mot den nya taggen i `compose.yaml` respektive
 `compose.desktop.yaml` (och i `setup.sh`) och upprepa.
 
 ## Verifiera nedladdningar
