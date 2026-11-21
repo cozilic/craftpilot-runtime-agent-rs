@@ -13,7 +13,10 @@ use crate::error::{AgentError, Result};
 use crate::rcon::{self, RconSettings};
 
 const CONTAINER_PREFIX: &str = "craftpilot-";
-const MOUNT_PORT: u16 = 25565;
+pub(crate) const MOUNT_PORT: u16 = 25565;
+
+/// Hur länge en start måste överleva innan den acks som STARTED.
+const START_VERIFY_WINDOW: Duration = Duration::from_secs(5);
 const MAX_CAPTURED_ERROR: usize = 220;
 /// Samma konsol-FIFO som masterns `RuntimeSpec::CONSOLE_FILE`. Spelet äger
 /// läsänden (`0<>` i startkommandot), agenten skriver en rad per kommando.
@@ -157,6 +160,8 @@ impl Docker {
                 "container did not remain running after start".into(),
             ));
         }
+
+        self.wait_start_stable(&server_id).await?;
 
         let container_id = self.container_id(&expected_name).await?;
         info!(server_id = %server_id, "server_started");
@@ -342,6 +347,15 @@ impl Docker {
             cpus,
             "--restart".into(),
             "no".into(),
+            // Docker json-file utan gräns växer tills nodens disk är full.
+            // Rotationen håller kvar tillräckligt många rader för att
+            // telemetrins 400-radsfönster ska fungera även efter en rotation.
+            "--log-driver".into(),
+            "json-file".into(),
+            "--log-opt".into(),
+            "max-size=10m".into(),
+            "--log-opt".into(),
+            "max-file=5".into(),
             "--user".into(),
             spec.container_user.clone(),
             "--volume".into(),
@@ -352,6 +366,30 @@ impl Docker {
         ];
         args.extend(spec.command.iter().cloned());
         args
+    }
+
+    /// En JVM som dör på grund av fel jar, fel Java-version eller EULA kan
+    /// hinna rapporteras som `running` av Docker precis efter start. Vänta en
+    /// kort stund och rapportera exitkoden i stället för att acka STARTED.
+    async fn wait_start_stable(&self, server_id: &str) -> Result<()> {
+        let deadline = Instant::now() + START_VERIFY_WINDOW;
+        loop {
+            match self.state(server_id).await? {
+                None => {
+                    return Err(AgentError::Runtime(
+                        "container disappeared during startup".into(),
+                    ))
+                }
+                Some(state) if !state.running => {
+                    return Err(AgentError::Runtime(format!(
+                        "container exited with code {} during startup",
+                        state.exit_code
+                    )))
+                }
+                Some(_) if Instant::now() >= deadline => return Ok(()),
+                Some(_) => sleep(Duration::from_millis(250)).await,
+            }
+        }
     }
 
     /// Containerns tillstånd för telemetrin. Saknad container är ett
@@ -728,7 +766,7 @@ impl ContainerSpec {
 
 /// `craftpilot-<första 8 hex>` — samma namn som masterns `containerName`
 /// (`Str::lower(substr($id, 0, 8))`).
-fn container_name(server_id: &str) -> String {
+pub(crate) fn container_name(server_id: &str) -> String {
     let compact: String = server_id
         .chars()
         .filter(|ch| *ch != '-')
@@ -1023,6 +1061,9 @@ mod tests {
         assert!(joined.contains(&format!("--label craftpilot.server_id={SERVER_ID}")));
         assert!(joined.contains("--network craftpilot-servers"));
         assert!(joined.contains("--memory 1024m --memory-swap 1024m"));
+        assert!(joined.contains("--log-driver json-file"));
+        assert!(joined.contains("--log-opt max-size=10m"));
+        assert!(joined.contains("--log-opt max-file=5"));
         assert!(joined.contains("--publish 25599:25565/tcp"));
         assert!(joined.contains("--volume /host/servers/096d46aa:/data:rw"));
         assert!(args.ends_with(&[
