@@ -12,12 +12,14 @@ public sealed class PanelWindow : Form
     private readonly WebView2 _webView = new() { Dock = DockStyle.Fill };
     private readonly Icon _brandIcon = TrayIconFactory.CreateBrandIcon(64);
     private readonly string _panelUrl;
+    private readonly string? _initialTab;
     private bool _initialized;
     private bool _allowClose;
 
-    public PanelWindow(string panelUrl)
+    public PanelWindow(string panelUrl, string? initialTab = null)
     {
         _panelUrl = panelUrl;
+        _initialTab = initialTab;
 
         Text = "CraftPilot Runtime Agent";
         Icon = _brandIcon;
@@ -32,6 +34,15 @@ public sealed class PanelWindow : Form
     }
 
     public void AllowClose() => _allowClose = true;
+
+    /// <summary>Byter till en flik i ett redan öppet fönster (tray-menyn).</summary>
+    public void NavigateTo(string tab)
+    {
+        if (_initialized)
+        {
+            _webView.CoreWebView2.Navigate($"{_panelUrl}?tab={Uri.EscapeDataString(tab)}");
+        }
+    }
 
     protected override void Dispose(bool disposing)
     {
@@ -82,7 +93,10 @@ public sealed class PanelWindow : Form
             core.NewWindowRequested += OnNewWindowRequested;
             core.NavigationStarting += OnNavigationStarting;
 
-            _webView.Source = new Uri(_panelUrl);
+            var target = _initialTab is null
+                ? _panelUrl
+                : $"{_panelUrl}?tab={Uri.EscapeDataString(_initialTab)}";
+            _webView.Source = new Uri(target);
             _initialized = true;
         }
         catch (Exception ex)

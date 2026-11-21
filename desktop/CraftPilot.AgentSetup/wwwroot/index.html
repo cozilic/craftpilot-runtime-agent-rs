@@ -248,6 +248,17 @@
             <span class="muted" id="update-checked">—</span>
           </div>
 
+          <div class="diagnostics">
+            <h3 data-i18n="diagnostics.title">Felsökning</h3>
+            <p class="hint hint-tight" data-i18n="diagnostics.hint">Skapa en textfil med versioner, Docker-läge och agentlogg. Claim-koder och hemligheter tas bort automatiskt.</p>
+            <div class="actions">
+              <button class="button button-quiet" id="diagnostics" type="button" data-i18n="diagnostics.create">Skapa diagnos</button>
+              <button class="button button-link" id="diagnostics-copy" type="button" hidden data-i18n="diagnostics.copy">Kopiera</button>
+              <button class="button button-link" id="diagnostics-download" type="button" hidden data-i18n="diagnostics.download">Ladda ner</button>
+            </div>
+            <pre class="diagnostics-output" id="diagnostics-output" hidden></pre>
+          </div>
+
           <div class="actions">
             <button class="button button-primary" id="install-panel" type="button" data-i18n="action.install">Installera / starta</button>
             <button class="button button-quiet" id="update" type="button" data-i18n="action.update">Uppdatera</button>

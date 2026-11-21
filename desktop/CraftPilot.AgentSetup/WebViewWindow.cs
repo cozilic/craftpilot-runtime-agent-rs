@@ -13,6 +13,7 @@ public static class WebViewWindow
         string url,
         IHostApplicationLifetime lifetime,
         AgentSetupService service,
+        UpdateChecker updateChecker,
         bool showPanel)
     {
         try
@@ -26,7 +27,7 @@ public static class WebViewWindow
         }
 
         var ready = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var thread = new Thread(() => Run(url, lifetime, service, showPanel, ready))
+        var thread = new Thread(() => Run(url, lifetime, service, updateChecker, showPanel, ready))
         {
             IsBackground = true,
             Name = "CraftPilot tray",
@@ -69,6 +70,7 @@ public static class WebViewWindow
         string url,
         IHostApplicationLifetime lifetime,
         AgentSetupService service,
+        UpdateChecker updateChecker,
         bool showPanel,
         TaskCompletionSource<bool> ready)
     {
@@ -77,7 +79,7 @@ public static class WebViewWindow
             Application.SetHighDpiMode(HighDpiMode.PerMonitorV2);
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
-            using var context = new TrayContext(url, lifetime, service, showPanel);
+            using var context = new TrayContext(url, lifetime, service, updateChecker, showPanel);
             ready.TrySetResult(true);
             Application.Run(context);
         }

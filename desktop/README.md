@@ -88,7 +88,7 @@ inloggning. Då visas bara tray-ikonen; panelens fönster skapas först när du 
 inställning finns i tray-menyn.
 
 **Avbryt** avbryter en pågående åtgärd (installation, uppdatering, stopp eller borttagning).
-**Uppdatera** hämtar den senaste `main`-imagen och startar om agenten. **Stoppa** stoppar
+**Uppdatera** hämtar den image som compose-filen pekar på (`:0.10`) och startar om agenten. **Stoppa** stoppar
 containern men behåller både serverdata och agentens state. **Ta bort** tar bort containern och
 panelens installationsfiler (`.env.desktop` och `compose.desktop.yaml`); serverdata, agentens
 state-volym och nodens credential ligger kvar, så nästa installation återansluter samma nod.
@@ -105,6 +105,24 @@ startar. Om en nyare version finns visas en rad med versionsnummer och en nedlad
 **Kontrollera igen** gör om både status- och versionskontrollen. Kontrollen kräver HTTPS till
 `api.github.com` och resultatet cachas i tio minuter; ett nätverksfel påverkar inte Docker- eller
 agentstatusen.
+
+## Notiser, snabbåtgärder och felsökning
+
+Tray-ikonen visar Docker-, master- och agentstatus. Panelen visar dessutom en Windows-notis när
+Docker eller agenten stannar, när mastern inte svarar, när disken börjar bli full, när en server
+kraschar med en exitkod och när en ny panelversion finns. Samma fel notifieras högst en gång per
+cooldown, så en långvarig störning inte fyller skärmen.
+
+Tray-menyn har **Starta om agenten** (startar bara om agentcontainern) och **Öppna loggen** (öppnar
+panelens loggflik).
+
+Under **Inställningar → Felsökning** skapar **Skapa diagnos** en textfil med versioner, Docker-läge,
+serverlistan och agentloggen. Claim-koder, tokens och lösenord redigeras automatiskt. Filen kan
+kopieras eller laddas ner och skickas med en supportfråga.
+
+Serverraderna visar CPU och minne för körande containrar och har en **Starta om**-knapp. Panelen
+adresserar bara containrar som den hittar via `craftpilot.managed`-labeln och det server-id som
+anropet gäller.
 
 ## Var sakerna hamnar
 

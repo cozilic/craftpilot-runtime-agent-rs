@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text.RegularExpressions;
 
 namespace CraftPilot.AgentSetup;
 
@@ -12,7 +13,11 @@ public sealed record ServerContainer(
     string ServerId,
     string State,
     string Image,
-    int? HostPort = null)
+    int? HostPort = null,
+    int? ExitCode = null,
+    double? CpuPercent = null,
+    long? MemoryUsedMb = null,
+    long? MemoryLimitMb = null)
 {
     public bool Running => string.Equals(State, "running", StringComparison.OrdinalIgnoreCase);
 
@@ -43,7 +48,33 @@ public static class ServerContainers
     /// (namn, id, state, image) innehåller pipe.
     /// </summary>
     public const string Format =
-        "{{.Names}}|{{.Label \"craftpilot.server_id\"}}|{{.State}}|{{.Image}}|{{.Ports}}";
+        "{{.Names}}|{{.Label \"craftpilot.server_id\"}}|{{.State}}|{{.Image}}|{{.Ports}}|{{.Status}}";
+
+    private static readonly Regex ExitCodePattern = new(
+        @"\((\d+)\)",
+        RegexOptions.CultureInvariant);
+
+    /// <summary>
+    /// Namnet agenten ger serverns container: <c>craftpilot-</c> plus åtta
+    /// hextecken ur server-id:t. Panelen använder det för att bara starta om
+    /// en container som bevisligen hör till det id som anropet gäller.
+    /// </summary>
+    public static string ExpectedName(string? serverId) =>
+        serverId is { Length: >= 8 } && Guid.TryParse(serverId, out _)
+            ? $"craftpilot-{serverId[..8].ToLowerInvariant()}"
+            : string.Empty;
+
+    /// <summary>Exitkoden ur Docker-statusen, t.ex. "Exited (1) 2 minutes ago".</summary>
+    public static int? ExitCodeFrom(string? status)
+    {
+        if (string.IsNullOrWhiteSpace(status))
+        {
+            return null;
+        }
+
+        var match = ExitCodePattern.Match(status);
+        return match.Success && int.TryParse(match.Groups[1].Value, out var code) ? code : null;
+    }
 
     public static IReadOnlyList<ServerContainer> Parse(string? output)
     {
@@ -80,7 +111,8 @@ public static class ServerContainers
                 serverId,
                 parts[2].Trim().ToLowerInvariant(),
                 parts[3].Trim(),
-                parts.Length > 4 ? HostPortFrom(parts[4]) : null));
+                parts.Length > 4 ? HostPortFrom(parts[4]) : null,
+                parts.Length > 5 ? ExitCodeFrom(parts[5]) : null));
         }
 
         return Sorted(servers);
