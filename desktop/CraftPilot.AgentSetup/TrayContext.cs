@@ -7,6 +7,8 @@ public sealed class TrayContext : ApplicationContext
 {
     private readonly IHostApplicationLifetime _lifetime;
     private readonly AgentSetupService _service;
+    private readonly UpdateChecker _updateChecker;
+    private readonly PanelNotifier _notifier = new();
     private readonly string _panelUrl;
     private readonly NotifyIcon _notifyIcon;
     private readonly ContextMenuStrip _menu;
@@ -25,11 +27,13 @@ public sealed class TrayContext : ApplicationContext
         string panelUrl,
         IHostApplicationLifetime lifetime,
         AgentSetupService service,
+        UpdateChecker updateChecker,
         bool showPanel)
     {
         _panelUrl = panelUrl;
         _lifetime = lifetime;
         _service = service;
+        _updateChecker = updateChecker;
         _dispatcher.CreateControl();
 
         _icons = new Dictionary<TrayState, Icon>
@@ -54,6 +58,12 @@ public sealed class TrayContext : ApplicationContext
         var refreshItem = new ToolStripMenuItem("Kontrollera igen");
         refreshItem.Click += (_, _) => _ = PollAsync();
 
+        var restartItem = new ToolStripMenuItem("Starta om agenten");
+        restartItem.Click += (_, _) => _ = RestartAgentAsync();
+
+        var logItem = new ToolStripMenuItem("Öppna loggen");
+        logItem.Click += (_, _) => OpenPanel("log");
+
         var exitItem = new ToolStripMenuItem("Avsluta");
         exitItem.Click += (_, _) => _lifetime.StopApplication();
 
@@ -62,6 +72,8 @@ public sealed class TrayContext : ApplicationContext
         _menu.Items.Add(_statusItem);
         _menu.Items.Add(new ToolStripSeparator());
         _menu.Items.Add(refreshItem);
+        _menu.Items.Add(restartItem);
+        _menu.Items.Add(logItem);
         _menu.Items.Add(_startupItem);
         _menu.Items.Add(new ToolStripSeparator());
         _menu.Items.Add(exitItem);
@@ -95,7 +107,7 @@ public sealed class TrayContext : ApplicationContext
         }
     }
 
-    private void OpenPanel()
+    private void OpenPanel(string? tab = null)
     {
         if (_exiting)
         {
@@ -104,8 +116,12 @@ public sealed class TrayContext : ApplicationContext
 
         if (_panel is null || _panel.IsDisposed)
         {
-            _panel = new PanelWindow(_panelUrl);
+            _panel = new PanelWindow(_panelUrl, tab);
             _panel.FormClosed += (_, _) => _panel = null;
+        }
+        else if (tab is not null)
+        {
+            _panel.NavigateTo(tab);
         }
 
         if (!_panel.Visible)
@@ -149,12 +165,27 @@ public sealed class TrayContext : ApplicationContext
         try
         {
             var status = await _service.GetStatusAsync();
+            UpdateCheckResponse? version = null;
+            try
+            {
+                version = await _updateChecker.CheckAsync(false);
+            }
+            catch
+            {
+                // Versionskontrollen är ett komplement; statusen gäller ändå.
+            }
+
+            var alerts = _notifier.Observe(status, version, DateTimeOffset.UtcNow);
             Post(() =>
             {
                 if (!_exiting)
                 {
                     Apply(TrayStatusClassifier.From(status));
                     _startupItem.Checked = status.StartupEnabled;
+                    foreach (var alert in alerts)
+                    {
+                        ShowAlert(alert);
+                    }
                 }
             });
         }
@@ -173,6 +204,33 @@ public sealed class TrayContext : ApplicationContext
         {
             _polling = false;
         }
+    }
+
+    private void ShowAlert(PanelAlert alert) =>
+        _notifyIcon.ShowBalloonTip(
+            6000,
+            alert.Title,
+            alert.Message,
+            alert.Kind == PanelAlertKind.Error ? ToolTipIcon.Error : ToolTipIcon.Warning);
+
+    /// <summary>Startar om agenten från trayen utan att öppna panelen.</summary>
+    private async Task RestartAgentAsync()
+    {
+        var result = await _service.RestartAgentAsync();
+        Post(() =>
+        {
+            if (!_exiting)
+            {
+                _notifyIcon.ShowBalloonTip(
+                    5000,
+                    result.Ok ? "Agenten startar om" : "Kunde inte starta om agenten",
+                    result.Ok
+                        ? "Containern startas om. Statusen uppdateras inom några sekunder."
+                        : result.Error ?? "Okänt fel.",
+                    result.Ok ? ToolTipIcon.Info : ToolTipIcon.Error);
+            }
+        });
+        await PollAsync();
     }
 
     private void Apply(TrayStatus status)

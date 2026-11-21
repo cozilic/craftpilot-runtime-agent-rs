@@ -164,7 +164,8 @@ public sealed class AgentSetupService
 
             if (servers.ExitCode == 0)
             {
-                status = CopyStatus(status, servers: ServerContainers.Parse(servers.StdOut));
+                var parsed = ServerContainers.Parse(servers.StdOut);
+                status = CopyStatus(status, servers: await AttachStatsAsync(parsed, ct));
             }
         }
 
@@ -250,6 +251,14 @@ public sealed class AgentSetupService
     /// kvar på disken, så nästa start skapar en ny container med samma data.
     public Task<OperationResponse> PruneServersAsync(CancellationToken ct = default) =>
         RunOperationAsync(PruneServersCoreAsync, ct);
+
+    /// <summary>Startar om agentcontainern utan att röra serverdata.</summary>
+    public Task<OperationResponse> RestartAgentAsync(CancellationToken ct = default) =>
+        RunOperationAsync(RestartAgentCoreAsync, ct);
+
+    /// <summary>Startar om en servercontainer som panelen själv har hittat via labeln.</summary>
+    public Task<OperationResponse> RestartServerAsync(string serverId, CancellationToken ct = default) =>
+        RunOperationAsync((output, token) => RestartServerCoreAsync(serverId, output, token), ct);
 
     /// Kör en åtgärd med operation-lås, busy-flagga och Avbryt-stöd. Alla
     /// åtgärder går genom den här vägen, så panelen aldrig kan fastna i ett
@@ -441,6 +450,144 @@ public sealed class AgentSetupService
         return new OperationResponse(true, output.ToString().Trim(), null, await GetStatusAsync(ct));
     }
 
+    /// <summary>
+    /// Ett enda docker stats-anrop för alla körande servrar. Ett fel ger
+    /// oförändrade rader: statistiken är ett komplement, inte ett krav.
+    /// </summary>
+    private async Task<IReadOnlyList<ServerContainer>> AttachStatsAsync(
+        IReadOnlyList<ServerContainer> servers,
+        CancellationToken ct)
+    {
+        var running = servers
+            .Where(server => server.Running && ServerContainers.IsManagedName(server.Name))
+            .ToList();
+        if (running.Count == 0)
+        {
+            return servers;
+        }
+
+        var arguments = new List<string> { "stats", "--no-stream", "--format", ServerStats.Format };
+        arguments.AddRange(running.Select(server => server.Name));
+
+        var result = await RunAsync("docker", arguments, TimeSpan.FromSeconds(10), null, ct);
+        if (result.ExitCode != 0)
+        {
+            return servers;
+        }
+
+        var usage = ServerStats.Parse(result.StdOut);
+        return servers
+            .Select(server => usage.TryGetValue(server.Name, out var value)
+                ? server with
+                {
+                    CpuPercent = value.CpuPercent,
+                    MemoryUsedMb = value.MemoryUsedMb,
+                    MemoryLimitMb = value.MemoryLimitMb,
+                }
+                : server)
+            .ToList();
+    }
+
+    private async Task<OperationResponse> RestartAgentCoreAsync(StringBuilder output, CancellationToken ct)
+    {
+        var docker = await CheckDockerAsync(ct);
+        if (docker.State != DockerStateClassifier.Ready)
+        {
+            return Fail(DockerGuidance(docker.State), output);
+        }
+
+        if (!File.Exists(ComposePath) || !File.Exists(EnvPath))
+        {
+            var existing = await RunAsync(
+                "docker",
+                ["inspect", "--format", "{{.Id}}", ContainerName],
+                TimeSpan.FromSeconds(5),
+                null,
+                ct);
+            if (existing.ExitCode != 0)
+            {
+                return Fail("Agenten är inte installerad.", output);
+            }
+
+            var restart = await RunAsync(
+                "docker",
+                ["restart", ContainerName],
+                TimeSpan.FromMinutes(2),
+                null,
+                ct);
+            Append(output, restart);
+            return restart.ExitCode == 0
+                ? new OperationResponse(true, output.ToString().Trim(), null, await GetStatusAsync(ct))
+                : Fail("Kunde inte starta om agenten.", output);
+        }
+
+        var compose = await ComposeAsync(["restart", "agent"], TimeSpan.FromMinutes(2), ct);
+        Append(output, compose);
+        if (compose.ExitCode != 0)
+        {
+            return Fail("Kunde inte starta om agenten.", output);
+        }
+
+        await Task.Delay(TimeSpan.FromSeconds(1.5), ct);
+        return new OperationResponse(true, output.ToString().Trim(), null, await GetStatusAsync(ct));
+    }
+
+    /// <summary>
+    /// Startar bara om en container vars namn och server-id båda matchar
+    /// anropet. Ingen container adresseras med ett namn från HTTP-input.
+    /// </summary>
+    private async Task<OperationResponse> RestartServerCoreAsync(
+        string serverId,
+        StringBuilder output,
+        CancellationToken ct)
+    {
+        if (!Guid.TryParse(serverId, out var id))
+        {
+            return Fail("Server-id:t är ogiltigt.", output);
+        }
+
+        var docker = await CheckDockerAsync(ct);
+        if (docker.State != DockerStateClassifier.Ready)
+        {
+            return Fail(DockerGuidance(docker.State), output);
+        }
+
+        var list = await RunAsync(
+            "docker",
+            ["ps", "-a", "--filter", "label=craftpilot.managed=1", "--format", ServerContainers.Format],
+            TimeSpan.FromSeconds(10),
+            null,
+            ct);
+        if (list.ExitCode != 0)
+        {
+            return Fail("Kunde inte läsa serverlistan från Docker.", output);
+        }
+
+        var expected = ServerContainers.ExpectedName(id.ToString());
+        var server = ServerContainers.Parse(list.StdOut).FirstOrDefault(candidate =>
+            string.Equals(candidate.Name, expected, StringComparison.Ordinal) &&
+            string.Equals(candidate.ServerId, id.ToString(), StringComparison.OrdinalIgnoreCase));
+        if (server is null)
+        {
+            return Fail("Servern finns inte på den här noden.", output);
+        }
+
+        var restart = await RunAsync(
+            "docker",
+            ["restart", "-t", "30", server.Name],
+            TimeSpan.FromMinutes(2),
+            null,
+            ct);
+        Append(output, restart);
+        if (restart.ExitCode != 0)
+        {
+            return Fail("Kunde inte starta om servern.", output);
+        }
+
+        output.AppendLine($"Startade om {server.Name}.");
+        return new OperationResponse(true, output.ToString().Trim(), null, await GetStatusAsync(ct));
+    }
+
     private async Task<OperationResponse> StopCoreAsync(StringBuilder output, CancellationToken ct)
     {
         var docker = await CheckDockerAsync(ct);
@@ -606,6 +753,38 @@ public sealed class AgentSetupService
         }
 
         return await GetComposeLogsAsync(ct);
+    }
+
+    /// <summary>
+    /// Samlar panelens, Dockers och agentens läge i en textfil för support.
+    /// Innehållet redigeras av DiagnosticsReport innan det lämnar panelen.
+    /// </summary>
+    public async Task<string> GetDiagnosticsAsync(CancellationToken ct = default)
+    {
+        var status = await GetStatusAsync(ct);
+        var log = await GetLogsAsync(ct);
+        var composeVersion = await RunAsync(
+            "docker",
+            ["compose", "version", "--short"],
+            TimeSpan.FromSeconds(5),
+            null,
+            ct);
+
+        ProcessResult? ps = null;
+        if (File.Exists(ComposePath) && File.Exists(EnvPath))
+        {
+            ps = await ComposeAsync(["ps"], TimeSpan.FromSeconds(15), ct);
+        }
+
+        return DiagnosticsReport.Build(new DiagnosticsInput(
+            PanelVersion.Current,
+            DateTimeOffset.Now,
+            Environment.MachineName,
+            System.Runtime.InteropServices.RuntimeInformation.OSDescription,
+            status,
+            log,
+            ps?.Combined,
+            composeVersion.ExitCode == 0 ? composeVersion.StdOut.Trim() : null));
     }
 
     private async Task<string> GetComposeLogsAsync(CancellationToken ct)

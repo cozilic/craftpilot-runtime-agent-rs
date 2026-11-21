@@ -600,7 +600,17 @@ function setupTabs() {
     // Utan sparat val börjar panelen på Översikt.
   }
 
-  selectTab(saved ?? 'main');
+  // Tray-menyn kan öppna en viss flik direkt (?tab=log).
+  let requested = null;
+  try {
+    requested = new URLSearchParams(window.location.search).get('tab');
+  }
+  catch
+  {
+    // Utan URLSearchParams gäller det sparade valet.
+  }
+
+  selectTab(TAB_IDS.includes(requested) ? requested : (saved ?? 'main'));
 }
 
 // Språkvalet ligger i Inställningar. Panelen byter texter direkt och ritar om
@@ -646,6 +656,21 @@ const SERVER_STATES = {
   absent: { key: 'state.absent', kind: 'idle' },
 };
 
+function restartServer(server) {
+  const name = `Server ${server.shortId || server.serverId}`;
+  if (!window.confirm(t('servers.restartConfirm', { name }))) {
+    return;
+  }
+
+  // Servern hittas av panelens backend via server-id + label; inget
+  // containernamn skickas från webbsidan.
+  runOperation(
+    `/api/servers/${encodeURIComponent(server.serverId)}/restart`,
+    {},
+    t('log.restartLabel'),
+  );
+}
+
 function serverRow(server) {
   const info = SERVER_STATES[server.state] ?? {
     key: null,
@@ -684,7 +709,21 @@ function serverRow(server) {
     ? t('servers.waitingFirstStart')
     : `${server.name} · ${server.image}`;
 
-  main.append(name, image);
+  const stats = document.createElement('span');
+  stats.className = 'server-stats';
+  if (server.running) {
+    const locale = i18n.language === 'sv' ? 'sv-SE' : 'en-GB';
+    const cpu = server.cpuPercent != null
+      ? `${server.cpuPercent.toLocaleString(locale, { maximumFractionDigits: 1 })} %`
+      : '—';
+    const memory = server.memoryUsedMb != null ? `${server.memoryUsedMb} MB` : '—';
+    stats.textContent = `${cpu} · ${memory}`;
+    stats.title = server.memoryLimitMb
+      ? t('servers.memoryOf', { used: server.memoryUsedMb, max: server.memoryLimitMb })
+      : '';
+  }
+
+  main.append(name, image, stats);
 
   const badge = document.createElement('span');
   badge.className = `badge badge-${info.kind}`;
@@ -692,6 +731,18 @@ function serverRow(server) {
 
   link.append(dot, main, badge);
   item.append(link);
+
+  // Bara en container som faktiskt körs kan startas om, och bara om raden
+  // har ett server-id (kataloger utan container har inget att starta om).
+  if (server.running && server.serverId) {
+    const restart = document.createElement('button');
+    restart.type = 'button';
+    restart.className = 'button button-quiet server-restart';
+    restart.textContent = t('servers.restart');
+    restart.addEventListener('click', () => restartServer(server));
+    item.append(restart);
+  }
+
   return item;
 }
 
@@ -1006,6 +1057,62 @@ $('copy-claim').addEventListener('click', async () => {
   } catch {
     appendLog(t('log.copyFailed'));
   }
+});
+
+// Diagnosen samlas i panelens backend (redigerad där) och kan kopieras eller
+// laddas ner som en textfil av nodägaren.
+let diagnosticsText = '';
+
+async function createDiagnostics() {
+  const button = $('diagnostics');
+  const original = button.textContent;
+  button.disabled = true;
+  button.textContent = t('diagnostics.working');
+
+  try {
+    const result = await api('/api/diagnostics');
+    diagnosticsText = result.text || '';
+    $('diagnostics-output').textContent = diagnosticsText;
+    $('diagnostics-output').hidden = false;
+    $('diagnostics-copy').hidden = false;
+    $('diagnostics-download').hidden = false;
+  } catch (error) {
+    appendLog(t('diagnostics.failed', { error: error.message }));
+  } finally {
+    button.disabled = false;
+    button.textContent = original;
+  }
+}
+
+$('diagnostics').addEventListener('click', createDiagnostics);
+
+$('diagnostics-copy').addEventListener('click', async () => {
+  if (!diagnosticsText) {
+    return;
+  }
+
+  try {
+    await navigator.clipboard.writeText(diagnosticsText);
+    const button = $('diagnostics-copy');
+    button.textContent = t('diagnostics.copied');
+    window.setTimeout(() => { button.textContent = t('diagnostics.copy'); }, 1400);
+  } catch {
+    appendLog(t('log.copyFailed'));
+  }
+});
+
+$('diagnostics-download').addEventListener('click', () => {
+  if (!diagnosticsText) {
+    return;
+  }
+
+  const blob = new Blob([diagnosticsText], { type: 'text/plain;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `craftpilot-diagnos-${new Date().toISOString().slice(0, 10)}.txt`;
+  link.click();
+  URL.revokeObjectURL(url);
 });
 
 $('quit').addEventListener('click', async () => {

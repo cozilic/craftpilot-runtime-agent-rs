@@ -119,6 +119,20 @@ app.MapPost("/api/remove", async (AgentSetupService service, CancellationToken c
 app.MapPost("/api/servers/prune", async (AgentSetupService service, CancellationToken ct) =>
     Results.Ok(await service.PruneServersAsync(ct)));
 
+// Startar om agenten respektive en servercontainer. Server-id:t valideras
+// mot Docker-listan i AgentSetupService; inget containernamn kommer från klienten.
+app.MapPost("/api/restart", async (AgentSetupService service, CancellationToken ct) =>
+    Results.Ok(await service.RestartAgentAsync(ct)));
+
+app.MapPost("/api/servers/{serverId}/restart", async (
+    string serverId,
+    AgentSetupService service,
+    CancellationToken ct) => Results.Ok(await service.RestartServerAsync(serverId, ct)));
+
+// En redigerad textfil med versioner, Docker-läge, servrar och agentlogg.
+app.MapGet("/api/diagnostics", async (AgentSetupService service, CancellationToken ct) =>
+    Results.Ok(new { text = await service.GetDiagnosticsAsync(ct) }));
+
 // Läget för en pågående nedladdning, så baren kan visa procent.
 app.MapGet("/api/panel-update/progress", (PanelUpdater updater) =>
     Results.Ok(updater.Progress));
@@ -188,7 +202,8 @@ Console.WriteLine($"CraftPilot Agent Setup UI: {url}");
 Console.WriteLine("Panelen körs i trayen. Välj Avsluta i tray-menyn för att stoppa panelen.");
 
 var setupService = app.Services.GetRequiredService<AgentSetupService>();
-if (!WebViewWindow.TryStart(url, app.Lifetime, setupService, !startInTray))
+var updateChecker = app.Services.GetRequiredService<UpdateChecker>();
+if (!WebViewWindow.TryStart(url, app.Lifetime, setupService, updateChecker, !startInTray))
 {
     if (!startInTray)
     {

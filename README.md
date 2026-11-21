@@ -119,6 +119,18 @@ the Python agent — no master changes are required to run it side by side.
   private staging directory. The result is installed with one atomic rename into a missing or
   empty `<data root>/<server uuid>`; a non-empty destination is refused, never overwritten.
   Answers `SNAPSHOT_STAGED` with the verified digest and byte count the master checks.
+- **Bounded container logs**: every game container runs with the Docker `json-file` driver
+  capped at 10 MiB × 5 files, so a chatty server can no longer fill the node's disk. Console
+  delivery still uses a timestamp cursor and keeps its 400-line window.
+- **Verified starts**: after `docker run` the agent waits up to five seconds and reports the
+  exit code instead of acknowledging STARTED for a JVM that died on a bad jar, the wrong Java
+  version or the EULA.
+- **Player counts from the server-list ping**: telemetry asks the game container for its status
+  and reports `players.online`, with console join/leave lines as a fallback while the port is
+  still starting.
+- **Event-driven file tree**: a recursive watcher (inotify, ReadDirectoryChangesW or kqueue)
+  rescans after host changes with a five-second debounce; a 30-second scan remains as a safety
+  net for filesystems without watcher support.
 - Signed-off configuration validation: HTTPS-only master origin with no path/query/credentials,
   poll interval 5–120 s, absolute data root, Docker network name, stop grace 0–45 s.
 
@@ -193,19 +205,20 @@ For Docker Desktop on macOS or Windows, use `compose.desktop.yaml`; see
 
 ### Update a node
 
-`compose.yaml`, `compose.desktop.yaml` and `setup.sh` pin the image to the stable `0.7` tag, so a
-node follows the 0.7.x releases instead of every push to `main`.
+`compose.yaml` and `compose.desktop.yaml` pin the image to the stable `0.10` tag, so a node follows
+the 0.10.x releases instead of every push to `main`. `scripts/check-version.sh`, which CI runs,
+fails when Cargo, the panel, the compose files and these docs disagree.
 
 ```sh
 cd /opt/craftpilot-agent
 sudo docker compose pull && sudo docker compose up -d
 ```
 
-An existing install keeps its compose file, so change `:main` to `:0.7` there once
+An existing install keeps its compose file, so change `:main` to `:0.10` there once
 (`/opt/craftpilot-agent/compose.yaml`, or the panel's install directory on Windows) before pulling.
 
 Re-running `sudo ./setup.sh` does the same. On Windows the panel's **Uppdatera** button
-pulls the new image and restarts the container. To move to a new minor release, change `:0.7` to the
+pulls the new image and restarts the container. To move to a new minor release, change `:0.10` to the
 new tag in the compose file (and in `setup.sh` on Linux) and repeat.
 
 `.github/workflows/publish-image.yml` builds the Docker image on every pull request and

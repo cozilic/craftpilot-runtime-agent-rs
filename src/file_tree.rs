@@ -6,6 +6,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use notify::{RecursiveMode, Watcher};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tracing::warn;
@@ -23,10 +24,14 @@ const MAX_DEPTH: usize = 32;
 const MAX_NAME_BYTES: usize = 255;
 pub const SYNC_BATCH: usize = 20;
 
-/// En återscanning var 30:e sekund fångar ändringar som gjorts direkt på
-/// värden (modpack-installationer, manuella filbyten) utan att kräva en
-/// inotify-watcher. Egna filmutationer invaliderar sin katalog direkt.
+/// Watchern fångar ändringar som gjorts direkt på värden (modpack,
+/// manuella filbyten) och schemalägger en omscanning efter en kort
+/// avstudsning. Den periodiska omscanningen är bara en säkerhetsventil för
+/// filsystem där watchern inte fungerar (nätverksdiskar, uttömda inotify-gränser).
 const FULL_SCAN_INTERVAL: Duration = Duration::from_secs(30);
+/// Minsta tid mellan två watcher-utlösta omscanningar, så en pågående
+/// modpack-utpackning inte startar en ny genomsökning per fil.
+const EVENT_SCAN_INTERVAL: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Entry {
@@ -110,6 +115,10 @@ pub struct FileTreeIndex {
     state: Mutex<State>,
     assigned: Mutex<BTreeSet<String>>,
     started: AtomicBool,
+    /// Sätts av watchern; nollställs när en omscanning har tagit den.
+    wake: AtomicBool,
+    /// Watchern måste leva lika länge som indexet, annars slutar den lyssna.
+    watcher: Mutex<Option<notify::RecommendedWatcher>>,
 }
 
 impl FileTreeIndex {
@@ -134,13 +143,15 @@ impl FileTreeIndex {
             }),
             assigned: Mutex::new(BTreeSet::new()),
             started: AtomicBool::new(false),
+            wake: AtomicBool::new(false),
+            watcher: Mutex::new(None),
         }
     }
 
     /// Startar en bakgrundstråd så en stor värld kan indexeras utan att
     /// blockera claim/ack. Agenten uppdaterar tilldelningen med
-    /// `set_assigned`; tråden skannar om vid start, ändrad tilldelning och
-    /// sedan var 30:e sekund.
+    /// `set_assigned`; tråden skannar om vid start, ändrad tilldelning,
+    /// watcher-händelser och som säkerhetsventil var 30:e sekund.
     pub fn start(self: &Arc<Self>) {
         if self.started.swap(true, Ordering::SeqCst) {
             return;
@@ -154,16 +165,57 @@ impl FileTreeIndex {
                     .lock()
                     .unwrap_or_else(|poisoned| poisoned.into_inner())
                     .clone();
-                if index.should_scan(&assigned, FULL_SCAN_INTERVAL) {
+                let event = index.event_scan_due() && index.take_wake();
+                if event || index.should_scan(&assigned, FULL_SCAN_INTERVAL) {
                     if let Err(err) = index.scan_assigned(&assigned) {
                         warn!(error = %err, "scanning the server file tree failed");
                     }
                 }
-                std::thread::sleep(Duration::from_secs(1));
+                std::thread::sleep(Duration::from_millis(250));
             });
         if let Err(err) = result {
             warn!(error = %err, "starting the file tree worker failed");
         }
+        if let Err(err) = self.watch() {
+            // Utan watcher fungerar indexet fortfarande, men en ändring syns
+            // först vid nästa periodiska omscanning.
+            warn!(error = %err, "watching the server data root failed");
+        }
+    }
+
+    /// Lyssnar rekursivt på serverdata-roten. En trasig watcher får aldrig
+    /// stoppa indexet: den periodiska omscanningen är kvar som fallback.
+    fn watch(self: &Arc<Self>) -> notify::Result<()> {
+        let mut watcher = notify::recommended_watcher({
+            let index = Arc::downgrade(self);
+            move |event: notify::Result<notify::Event>| {
+                let Ok(event) = event else {
+                    return;
+                };
+                if matches!(event.kind, notify::EventKind::Access(_)) {
+                    return;
+                }
+                if let Some(index) = index.upgrade() {
+                    index.wake.store(true, Ordering::SeqCst);
+                }
+            }
+        })?;
+        watcher.watch(&self.data_root, RecursiveMode::Recursive)?;
+        *self
+            .watcher
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(watcher);
+        Ok(())
+    }
+
+    fn take_wake(&self) -> bool {
+        self.wake.swap(false, Ordering::SeqCst)
+    }
+
+    fn event_scan_due(&self) -> bool {
+        self.lock()
+            .last_scan
+            .is_none_or(|last| last.elapsed() >= EVENT_SCAN_INTERVAL)
     }
 
     pub fn set_assigned(&self, assigned: &BTreeSet<String>) {
@@ -899,5 +951,21 @@ mod tests {
         assert_eq!(reloaded.progress(), "fetching");
         assert!(reloaded.pending_updates(&assigned, SYNC_BATCH).is_empty());
         cleanup(&data);
+    }
+}
+
+#[cfg(test)]
+mod event_tests {
+    use super::*;
+
+    #[test]
+    fn watcher_wake_is_consumed_once() {
+        let root = std::env::temp_dir().join(format!("craftpilot-watch-{}", std::process::id()));
+        let index = FileTreeIndex::new(root.clone(), root);
+
+        assert!(!index.take_wake());
+        index.wake.store(true, Ordering::SeqCst);
+        assert!(index.take_wake());
+        assert!(!index.take_wake());
     }
 }
