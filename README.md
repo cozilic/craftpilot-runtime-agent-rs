@@ -63,8 +63,9 @@ the Python agent — no master changes are required to run it side by side.
   the agent reports its assigned servers: status from `docker inspect` (missing → `OFFLINE`,
   running → `ONLINE`, exited 0 → `OFFLINE`, non-zero → `CRASHED`), CPU/memory from
   `docker stats --no-stream`, raw network counters (`network_rx_bytes`/`network_tx_bytes`) from the
-  Docker Engine API `/containers/{id}/stats` summed over every interface (the CLI's `NetIO` is
-  rounded, so it cannot be used; a stopped container sends no counters at all), `players_max` from `server.properties` (`max-players`, default 20),
+  Docker Engine API `/containers/{id}/stats` through bollard, summed over every interface (the
+  CLI's `NetIO` is rounded, so it cannot be used; a stopped container sends no counters at all),
+  `players_max` from `server.properties` (`max-players`, default 20),
   `players_online` from join/leave console lines, `disk_used_mb` from a recursive walk of the
   server directory (cached for five minutes, symlinks are never followed), `artifact_present`
   from the jar name and minimum size the master lists in `artifacts`, and new console lines from

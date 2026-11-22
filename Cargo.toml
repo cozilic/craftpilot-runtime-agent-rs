@@ -25,6 +25,8 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 url = "2"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 notify = "8"
+futures-util = "0.3"
+bollard = "0.21.1"
 
 [profile.release]
 strip = true
