@@ -132,8 +132,9 @@ the Python agent — no master changes are required to run it side by side.
 - **Event-driven file tree**: a recursive watcher (inotify, ReadDirectoryChangesW or kqueue)
   rescans after host changes with a five-second debounce; a 30-second scan remains as a safety
   net for filesystems without watcher support.
-- Signed-off configuration validation: HTTPS-only master origin with no path/query/credentials,
-  poll interval 5–120 s, absolute data root, Docker network name, stop grace 0–45 s.
+- Signed-off configuration validation: a required HTTPS-only master origin with no
+  path/query/credentials, poll interval 5–120 s, absolute data root, Docker network name, stop
+  grace 0–45 s.
 
 ## Not implemented yet
 
@@ -143,7 +144,7 @@ A download larger than `CRAFTPILOT_MAX_UPLOAD_BYTES` is refused before anything 
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `CRAFTPILOT_MASTER_URL` | `https://craftpilot.se` | Master origin (HTTPS, no path). |
+| `CRAFTPILOT_MASTER_URL` | – (required) | Master origin (HTTPS, no path). The agent refuses to start without it. |
 | `CRAFTPILOT_AGENT_STATE_DIR` | `/var/lib/craftpilot-agent` | Private state directory. |
 | `CRAFTPILOT_SERVER_DATA_ROOT` | `/srv/craftpilot/servers` | Server data root (used once operations land). |
 | `CRAFTPILOT_NODE_ID` | – | Only to attach an existing node. |
@@ -158,6 +159,10 @@ A download larger than `CRAFTPILOT_MAX_UPLOAD_BYTES` is refused before anything 
 | `CRAFTPILOT_MAX_EDIT_BYTES` | `4194304` | Largest file the editor may read or write (same as the master's `server.files.max_edit_bytes`). |
 | `CRAFTPILOT_MAX_UPLOAD_BYTES` | `2147483648` | Largest upload accepted from the master (same as `server.files.max_upload_bytes`). |
 | `RUST_LOG` | `info` | Log filter. Console text, credentials and RCON passwords are never logged. |
+
+There is no built-in master default: a bare `docker run` without
+`CRAFTPILOT_MASTER_URL` exits with a configuration error instead of enrolling against
+production.
 
 ## Run locally
 
