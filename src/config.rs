@@ -77,8 +77,7 @@ impl Config {
     }
 
     pub fn from_env() -> Result<Self> {
-        let master_url =
-            parse_https_origin(&env_or("CRAFTPILOT_MASTER_URL", "https://craftpilot.se"))?;
+        let master_url = master_url_from(std::env::var("CRAFTPILOT_MASTER_URL").ok().as_deref())?;
 
         let poll_seconds = parse_u64("CRAFTPILOT_POLL_SECONDS", 5)?;
         if !(5..=120).contains(&poll_seconds) {
@@ -137,6 +136,20 @@ impl Config {
             max_upload_bytes: parse_u64("CRAFTPILOT_MAX_UPLOAD_BYTES", 2 * 1024 * 1024 * 1024)?,
         })
     }
+}
+
+/// Masterns adress är obligatorisk. Förut föll en tom miljö tillbaka på
+/// `https://craftpilot.se`, vilket gjorde att ett bare `docker run` kunde
+/// anmäla sig mot produktion av misstag. Det finns ingen default.
+fn master_url_from(raw: Option<&str>) -> Result<Url> {
+    let raw = raw
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| {
+            AgentError::Config(
+                "CRAFTPILOT_MASTER_URL must be set (there is no default master)".into(),
+            )
+        })?;
+    parse_https_origin(raw)
 }
 
 /// Mastern kräver samma form som `ApproveRuntimeNodeEnrollmentAction`:
@@ -326,6 +339,20 @@ fn detect_hostname() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn refuses_a_missing_or_blank_master_url() {
+        // Ett bare `docker run` ska stanna i konfigurationen i stället för att
+        // enrolla mot en inbyggd produktions-adress.
+        for raw in [None, Some(""), Some("   ")] {
+            let err = master_url_from(raw).unwrap_err();
+            assert!(
+                err.to_string()
+                    .contains("CRAFTPILOT_MASTER_URL must be set"),
+                "{raw:?} gav {err}"
+            );
+        }
+    }
 
     #[test]
     fn accepts_a_plain_https_origin() {
