@@ -102,8 +102,8 @@ Att köra `sudo ./setup.sh` igen gör samma sak.
 Panelen uppdateras separat genom att ladda ner `CraftPilot.AgentSetup.exe` från senaste release
 (bannern i panelen länkar dit).
 
-Ny minor-version (t.ex. 0.11): byt `:0.10` mot den nya taggen i `compose.yaml` respektive
-`compose.desktop.yaml` (och i `setup.sh`) och upprepa.
+Ny minor-version (t.ex. 0.11): sätt `CRAFTPILOT_RS_AGENT_IMAGE_TAG=0.11` i `.env` respektive
+`.env.desktop` (compose-filerna har `0.10` som default) och upprepa. Panelen behöver inte byggas om.
 
 ## Verifiera nedladdningar
 

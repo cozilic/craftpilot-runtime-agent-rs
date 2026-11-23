@@ -39,8 +39,12 @@ check_tag() {
 }
 
 for file in compose.yaml compose.desktop.yaml; do
-  tag=$(grep -oE 'craftpilot-runtime-agent-rs:[A-Za-z0-9._-]+' "$file" |
-    head -n1 | cut -d: -f2 || true)
+  tag=$(grep -oE 'craftpilot-runtime-agent-rs:[^[:space:]]+' "$file" | head -n1 || true)
+  tag=${tag#craftpilot-runtime-agent-rs:}
+  # Compose hämtar taggen via CRAFTPILOT_RS_AGENT_IMAGE_TAG med ett default;
+  # det är defaultet som är release-taggen och ska stämma med Cargo.
+  tag=${tag##*:-}
+  tag=${tag%\}}
   check_tag "$file" "$tag"
 done
 

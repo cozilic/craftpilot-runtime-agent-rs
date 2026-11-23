@@ -571,11 +571,18 @@ impl MasterClient {
 
 /// Förmågorna följer med varje poll. `features` skickas alltid (även tom),
 /// så en nod som tappar sin SFTPGo slutar lova en slutpunkt. Ett utelämnat
-/// fingeravtryck behåller masterns sparade värde.
+/// fingeravtryck behåller masterns sparade värde, och det gör en utelämnad
+/// port också.
 fn insert_capabilities(body: &mut Value, capabilities: &NodeCapabilities) {
     body["features"] = serde_json::json!(capabilities.features);
     if let Some(fingerprint) = capabilities.fingerprint.as_deref() {
         body["sftp_host_key_fingerprint"] = serde_json::json!(fingerprint);
+    }
+    // Porten agenten faktiskt publicerade: mastern använder den när
+    // operatören inte satt en egen `sftp_port`, så panelen och mappen pekar
+    // på en port som lyssnar även när defaultporten var upptagen på värden.
+    if let Some(port) = capabilities.bound_port {
+        body["sftp_bound_port"] = serde_json::json!(port);
     }
 }
 
