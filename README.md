@@ -126,8 +126,10 @@ the Python agent — no master changes are required to run it side by side.
   and every folder is validated against the server data root (UUID, directory, no symlink
   escape) before it is mapped. Accounts and folders that leave the master's state are
   removed. Only when the SFTPGo admin API answers does the agent report `sftp` and the SSH
-  host-key fingerprint (Ed25519 preferred) in heartbeat/claim; a stopped or broken SFTPGo
-  stops being advertised instead of leaving a dead endpoint in the panel. The admin API is
+  host-key fingerprint (Ed25519) in heartbeat/claim; a stopped or broken SFTPGo stops being
+  advertised instead of leaving a dead endpoint in the panel. SFTPGo serves **only** that
+  Ed25519 host key, so the fingerprint in the panel is the same one every client sees — a
+  client that would otherwise negotiate RSA cannot show a different value. The admin API is
   never published — only the SFTP port is.
 - **Bounded container logs**: every game container runs with the Docker `json-file` driver
   capped at 10 MiB × 5 files, so a chatty server can no longer fill the node's disk. Console
@@ -204,6 +206,11 @@ Every poll:
    state,
 3. it reports `features: ["sftp"]` and the Ed25519 host-key fingerprint only when the admin
    API answers, so a stopped SFTPGo is never advertised as a working endpoint.
+
+SFTPGo is started with
+`SFTPGO_SFTPD__HOST_KEYS=/var/lib/sftpgo/id_ed25519`, so RSA/ECDSA host keys are neither
+served nor reported. A container created by an older agent is recreated automatically (the
+`craftpilot.sftpgo.config` label), while the volumes and the Ed25519 key are kept.
 
 Accounts are key-only: the master's password channel is disabled and not implemented here, so
 a user without a public key gets no account (never an account without an authentication
