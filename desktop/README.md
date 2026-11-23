@@ -60,6 +60,11 @@ vid start och när panelen byter namn på noden — äldre images visar i ställ
 Spelarantalet kommer från Minecrafts server-list-ping mot serverns publicerade port; en server som
 inte svarar visas som **—** i stället för noll spelare.
 
+Kortet **SFTP** visar porten SFTPGo-containern faktiskt använder och om tjänsten svarar på den.
+Porten läses ur Docker, inte ur `.env.desktop`: agenten tar nästa lediga port när
+`CRAFTPILOT_SFTP_PORT` är upptagen, och då står den önskade porten som en rad under kortet.
+Samma uppgifter finns i diagnosfilen under `[SFTP]`.
+
 Servrar som skapats i panelen men ännu inte startats listas också under **Servrar på den här
 noden**, med status **Inte startad**. De har en katalog i serverdata-mappen men ingen container
 ännu; **Rensa stoppade** rör dem inte.
