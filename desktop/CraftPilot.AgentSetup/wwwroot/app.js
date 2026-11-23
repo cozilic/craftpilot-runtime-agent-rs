@@ -352,6 +352,14 @@ function renderSftp(status) {
   const hint = $('sftp-hint');
   hint.textContent = '';
 
+  if (sftp.enabled === false) {
+    setCard(
+      'sftp-card', 'sftp-dot', 'sftp-badge', 'sftp-value',
+      'idle', t('sftp.disabled'), t('sftp.disabledHint')
+    );
+    return;
+  }
+
   if (!state.dockerReady) {
     setCard(
       'sftp-card', 'sftp-dot', 'sftp-badge', 'sftp-value',
@@ -519,6 +527,9 @@ function renderStatus(status) {
   if (document.activeElement !== $('startup')) {
     $('startup').checked = Boolean(status.startupEnabled);
   }
+  if (document.activeElement !== $('sftp-enabled')) {
+    $('sftp-enabled').checked = status.sftp?.enabled !== false;
+  }
 
   $('install-dir').textContent = status.installDir || '—';
   $('master-link').href = `${PANEL_URL}/node`;
@@ -583,6 +594,7 @@ function applyControls() {
   $('load-logs').disabled = state.busy || !state.installed;
   $('prune-servers').disabled = state.busy || !state.dockerReady;
   $('update-now').disabled = state.busy;
+  $('sftp-enabled').disabled = state.busy;
 }
 
 const TAB_IDS = ['main', 'settings', 'log'];
@@ -1047,6 +1059,23 @@ $('startup').addEventListener('change', async () => {
     $('startup').checked = !enabled;
     appendLog(t('log.startupFailedWith', { error: error.message }));
   }
+});
+
+// Slår SFTP på eller av. Avstängt läge tar bort SFTPGo-containern (volymerna
+// och värdnyckeln består) och kräver att agenten startas om med den nya flaggan.
+$('sftp-enabled').addEventListener('change', async () => {
+  const enabled = $('sftp-enabled').checked;
+  if (!enabled && !window.confirm(t('settings.sftpConfirmOff'))) {
+    $('sftp-enabled').checked = true;
+    return;
+  }
+
+  await runOperation(
+    '/api/sftp',
+    { enabled },
+    enabled ? t('log.sftpOnLabel') : t('log.sftpOffLabel'),
+  );
+  await refresh(false);
 });
 
 $('update').addEventListener('click', () => {

@@ -109,6 +109,11 @@ app.MapPost("/api/settings", (SettingsRequest request, PanelSettingsStore store)
 app.MapPost("/api/update", async (AgentSetupService service, CancellationToken ct) =>
     Results.Ok(await service.UpdateAsync(ct)));
 
+// Slår SFTP på eller av för noden: flaggan skrivs i .env.desktop och agenten
+// återskapas, varpå den startar eller tar bort SFTPGo-containern.
+app.MapPost("/api/sftp", async (SftpRequest request, AgentSetupService service, CancellationToken ct) =>
+    Results.Ok(await service.SetSftpEnabledAsync(request.Enabled, ct)));
+
 app.MapPost("/api/stop", async (AgentSetupService service, CancellationToken ct) =>
     Results.Ok(await service.StopAsync(ct)));
 
@@ -305,6 +310,8 @@ namespace CraftPilot.AgentSetup
     public sealed record InstallRequest(string? MasterUrl, string? DataDir);
 
     public sealed record StartupRequest(bool Enabled);
+
+    public sealed record SftpRequest(bool Enabled);
 
     public sealed record SettingsRequest(string? UpdateCheckInterval);
 }

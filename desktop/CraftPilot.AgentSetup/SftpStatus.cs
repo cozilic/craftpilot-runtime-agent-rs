@@ -20,6 +20,9 @@ public sealed record SftpStatus
     /// <summary>Porten containern publicerar på värden (agentens val), null utan container.</summary>
     public int? BoundPort { get; init; }
 
+    /// <summary>CRAFTPILOT_SFTP_ENABLED i .env.desktop; false när SFTP är avstängt.</summary>
+    public bool Enabled { get; init; } = true;
+
     public bool Running { get; init; }
 
     /// <summary>TCP-anslutning till porten på 127.0.0.1 lyckades; null när den inte provades.</summary>
