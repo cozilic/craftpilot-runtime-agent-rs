@@ -6,6 +6,20 @@ using System.Text.Json;
 namespace CraftPilot.AgentSetup;
 
 /// <summary>
+/// Stegen en paneluppdatering går igenom. Panelen visar dem i progress-baren,
+/// så en manuell uppdatering från Inställningar säger vad som händer.
+/// </summary>
+public static class PanelUpdateStages
+{
+    public const string Idle = "idle";
+    public const string Release = "release";
+    public const string Download = "download";
+    public const string Verify = "verify";
+    public const string Install = "install";
+    public const string Restart = "restart";
+}
+
+/// <summary>
 /// Laddar ner och installerar panelens egen exe medan panelen körs. Windows
 /// låser en körande exe, men filen får byta namn – därför flyttas den gamla
 /// till <c>.old</c>, den nya läggs på plats och panelen startas om.
@@ -27,6 +41,7 @@ public sealed class PanelUpdater
     private long _received;
     private long _total = -1;
     private int _downloading;
+    private string _stage = PanelUpdateStages.Idle;
 
     public sealed record ReleaseFiles(
         string Tag,
@@ -38,10 +53,27 @@ public sealed class PanelUpdater
     public PanelDownloadProgress Progress => new(
         Volatile.Read(ref _downloading) == 1,
         Interlocked.Read(ref _received),
-        Interlocked.Read(ref _total));
+        Interlocked.Read(ref _total))
+    {
+        Stage = Volatile.Read(ref _stage),
+    };
 
     public async Task<PanelUpdateResult> UpdateAsync(CancellationToken ct = default)
     {
+        try
+        {
+            return await UpdateCoreAsync(ct);
+        }
+        finally
+        {
+            // Baren ska försvinna när åtgärden är klar, även när den gick fel.
+            Volatile.Write(ref _stage, PanelUpdateStages.Idle);
+        }
+    }
+
+    private async Task<PanelUpdateResult> UpdateCoreAsync(CancellationToken ct)
+    {
+        Volatile.Write(ref _stage, PanelUpdateStages.Release);
         var exePath = Environment.ProcessPath;
         if (!OperatingSystem.IsWindows() ||
             string.IsNullOrEmpty(exePath) ||
@@ -117,7 +149,9 @@ public sealed class PanelUpdater
                     release.ReleaseUrl);
             }
 
+            Volatile.Write(ref _stage, PanelUpdateStages.Download);
             var actual = await DownloadAsync(release.InstallerUrl, downloadPath, ct);
+            Volatile.Write(ref _stage, PanelUpdateStages.Verify);
             if (!string.Equals(expected, actual, StringComparison.OrdinalIgnoreCase))
             {
                 TryDelete(downloadPath);
@@ -163,6 +197,7 @@ public sealed class PanelUpdater
         // Panelen körs från den här filen. Den får byta namn men inte raderas,
         // så den gamla versionen flyttas undan och den nya läggs på plats.
         var backupPath = exePath + ".old";
+        Volatile.Write(ref _stage, PanelUpdateStages.Install);
         try
         {
             TryDelete(backupPath);
@@ -199,6 +234,7 @@ public sealed class PanelUpdater
                 release.ReleaseUrl);
         }
 
+        Volatile.Write(ref _stage, PanelUpdateStages.Restart);
         try
         {
             Process.Start(new ProcessStartInfo(exePath)
