@@ -398,8 +398,17 @@ public sealed class AgentSetupService
             return Fail(DockerGuidance(docker.State), output);
         }
 
-        // Agenten läser flaggan vid start, så containern återskapas med den nya
-        // miljön. State-volymen och serverdatan behålls.
+        // Agenten läser flaggan vid start, så en körande agent måste återskapas
+        // med den nya miljön. Är agenten stoppad sparas bara flaggan: den ska
+        // inte startas som en bieffekt av en SFTP-ändring (panelen låser också
+        // SFTP-knapparna då).
+        if (!await IsAgentRunningAsync(ct))
+        {
+            output.AppendLine("Agenten är stoppad — inställningen gäller nästa gång den startar.");
+            return new OperationResponse(true, output.ToString().Trim(), null, await GetStatusAsync(ct));
+        }
+
+        // State-volymen och serverdatan behålls.
         var up = await ComposeAsync(
             ["up", "-d", "--force-recreate", "agent"],
             TimeSpan.FromMinutes(5),
@@ -482,6 +491,20 @@ public sealed class AgentSetupService
 
         await Task.Delay(TimeSpan.FromSeconds(2.5), ct);
         return new OperationResponse(true, output.ToString().Trim(), null, await GetStatusAsync(ct));
+    }
+
+    /// <summary>Sant när agentcontainern finns och kör, inte bara existerar.</summary>
+    private async Task<bool> IsAgentRunningAsync(CancellationToken ct)
+    {
+        var inspect = await RunAsync(
+            "docker",
+            ["inspect", "--format", "{{.State.Status}}", ContainerName],
+            TimeSpan.FromSeconds(5),
+            null,
+            ct);
+
+        return inspect.ExitCode == 0 &&
+            string.Equals(inspect.StdOut.Trim(), "running", StringComparison.OrdinalIgnoreCase);
     }
 
     private async Task<OperationResponse> StartAgentCoreAsync(
