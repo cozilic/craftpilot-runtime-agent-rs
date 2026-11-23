@@ -125,6 +125,9 @@ impl Command {
 pub struct NodeCapabilities {
     pub features: Vec<String>,
     pub fingerprint: Option<String>,
+    /// Värdporten nodens SFTPGo publicerades på. `None` när tjänsten inte
+    /// svarar; då utelämnas fältet så masterns sparade värde står kvar.
+    pub bound_port: Option<u16>,
 }
 
 #[derive(Debug, Serialize)]

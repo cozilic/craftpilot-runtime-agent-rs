@@ -37,6 +37,8 @@ const DOCKER_PULL_TIMEOUT: Duration = Duration::from_secs(300);
 /// evighet; agenten ska fortsätta polla och försöka igen senare.
 const IMAGE_PULL_RETRY: Duration = Duration::from_secs(5 * 60);
 const SFTPGO_SFTP_PORT: u16 = 2022;
+/// Hur många portar agenten provar ovanför den föredragna innan den ger upp.
+const PORT_CANDIDATES: u16 = 32;
 const SFTPGO_ADMIN_PORT: u16 = 8080;
 /// SFTPGo får bara servera den här värdnyckeln. Panelen visar agentens
 /// rapporterade fingeravtryck, och en klient som annars förhandlat fram
@@ -49,7 +51,12 @@ const CONTAINER_CONFIG_VERSION: &str = "2";
 
 pub struct SftpService {
     image: String,
-    sftp_port: u16,
+    /// Porten operatören föredrar. Är den upptagen på värden publicerar
+    /// agenten SFTPGo på nästa lediga i stället.
+    preferred_port: u16,
+    /// Porten SFTPGo faktiskt publicerades på — den agenten rapporterar.
+    /// `None` tills containern skapats eller inspekterats.
+    bound_port: Option<u16>,
     container_name: String,
     network: String,
     server_data_root: PathBuf,
@@ -91,7 +98,8 @@ impl SftpService {
 
         Ok(Self {
             image: cfg.sftp.image.clone(),
-            sftp_port: cfg.sftp.port,
+            preferred_port: cfg.sftp.port,
+            bound_port: None,
             container_name: cfg.sftp.container_name.clone(),
             network: cfg.docker_network.clone(),
             server_data_root: cfg.server_data_root.clone(),
@@ -125,6 +133,9 @@ impl SftpService {
     /// publik och blir rätt igen så snart SFTPGo svarar.
     pub fn unavailable(&mut self) {
         self.capabilities = NodeCapabilities::default();
+        // Porten rapporteras bara medan SFTPGo svarar; nästa lyckade
+        // containerkontroll läser av den igen.
+        self.bound_port = None;
         self.container_healthy = false;
         self.container_checked_at = None;
         self.applied_revision = None;
@@ -171,6 +182,7 @@ impl SftpService {
         self.capabilities = NodeCapabilities {
             features: vec!["sftp".to_string()],
             fingerprint: self.fingerprint.clone(),
+            bound_port: self.bound_port,
         };
         Ok(())
     }
@@ -251,7 +263,14 @@ impl SftpService {
             )));
         }
 
-        // En uppgradering av agenten kan byta image, port eller miljö. Då
+        // Containern äger sanningen om porten: agenten väljer nästa lediga
+        // när den föredragna är upptagen, och en container som redan kör på
+        // en annan port ska behållas — inte bytas vid varje poll.
+        if let Some(port) = published_port(ports) {
+            self.bound_port = Some(port);
+        }
+
+        // En uppgradering av agenten kan byta image eller miljö. Då
         // återskapas containern; SFTPGo:s databas, hemm och värdnyckel ligger
         // kvar i volymerna.
         if !self.settings_match(image, config_version, ports) {
@@ -316,28 +335,16 @@ impl SftpService {
         self.container_checked_at = Some(Instant::now());
     }
 
-    /// Image, konfigurationsversion och publicerad port måste stämma. Ett
-    /// inställningsbyte (t.ex. Ed25519-only-värdnyckeln) kräver en ny
-    /// container eftersom Docker inte ändrar miljön på en befintlig.
+    /// Image, konfigurationsversion och en läsbar publicerad SFTP-port måste
+    /// stämma. Ett inställningsbyte (t.ex. Ed25519-only-värdnyckeln) kräver en
+    /// ny container eftersom Docker inte ändrar miljön på en befintlig.
+    ///
+    /// Porten jämförs inte mot den föredragna: agenten publicerar på nästa
+    /// lediga när den föredragna är upptagen, och den containern ska behållas.
     fn settings_match(&self, image: &str, config_version: &str, ports: &str) -> bool {
         image == self.image
             && config_version == CONTAINER_CONFIG_VERSION
-            && self.publishes_expected_port(ports)
-    }
-
-    fn publishes_expected_port(&self, raw: &str) -> bool {
-        let Ok(bindings) = serde_json::from_str::<serde_json::Value>(raw.trim()) else {
-            return false;
-        };
-        let expected = format!("{}", self.sftp_port);
-        bindings
-            .get(format!("{SFTPGO_SFTP_PORT}/tcp"))
-            .and_then(serde_json::Value::as_array)
-            .is_some_and(|entries| {
-                entries.iter().any(|entry| {
-                    entry.get("HostPort").and_then(serde_json::Value::as_str) == Some(&expected)
-                })
-            })
+            && published_port(ports).is_some()
     }
 
     async fn create_container(&mut self) -> Result<()> {
@@ -351,17 +358,47 @@ impl SftpService {
             }
         }
 
-        let args = self.container_args();
-        let refs: Vec<&str> = args.iter().map(String::as_str).collect();
-        let output = self.docker_timeout(&refs, DOCKER_PULL_TIMEOUT).await?;
-        if !output.status.success() {
-            return Err(AgentError::Runtime(format!(
-                "docker run for sftpgo failed: {}",
-                normalized(&output.stderr)
-            )));
+        // Den föredragna porten först; är den upptagen på värden tar agenten
+        // nästa lediga. En nod kan dela maskin med en panel som redan har
+        // 2222, och då får SFTPGo inte plats på defaultporten. Docker är den
+        // enda pålitliga domaren: agenten kör ofta i en egen container, så en
+        // egen bind-test säger inget om värdens portar.
+        for port in candidate_ports(self.preferred_port) {
+            let args = self.container_args(port);
+            let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+            let output = self.docker_timeout(&refs, DOCKER_PULL_TIMEOUT).await?;
+            if output.status.success() {
+                self.bound_port = Some(port);
+                info!(
+                    image = %self.image,
+                    port,
+                    preferred = self.preferred_port,
+                    "sftpgo container created"
+                );
+                return Ok(());
+            }
+
+            let stderr = normalized(&output.stderr);
+            if !port_unavailable(&stderr) {
+                return Err(AgentError::Runtime(format!(
+                    "docker run for sftpgo failed: {stderr}"
+                )));
+            }
+
+            // `docker run` kan ha hunnit skapa containern innan bindningen
+            // föll; namnet måste vara fritt innan nästa port provas.
+            self.remove_container().await?;
+            info!(
+                port,
+                preferred = self.preferred_port,
+                "host port is taken, trying the next one"
+            );
         }
-        info!(image = %self.image, port = self.sftp_port, "sftpgo container created");
-        Ok(())
+
+        Err(AgentError::Runtime(format!(
+            "no free host port for sftpgo near {}",
+            self.preferred_port
+        )))
     }
 
     async fn remove_container(&mut self) -> Result<()> {
@@ -379,7 +416,7 @@ impl SftpService {
 
     /// Fast argv — aldrig ett shell. Lösenordet går som env till SFTPGo
     /// (samma väg som `docker run -e`), inte via kommandoraden i en shell.
-    fn container_args(&self) -> Vec<String> {
+    fn container_args(&self, port: u16) -> Vec<String> {
         let mut args: Vec<String> = vec![
             "run".into(),
             "--detach".into(),
@@ -411,7 +448,7 @@ impl SftpService {
                 self.host_data_root.display()
             ),
             "--publish".into(),
-            format!("0.0.0.0:{}:{SFTPGO_SFTP_PORT}", self.sftp_port),
+            format!("0.0.0.0:{port}:{SFTPGO_SFTP_PORT}"),
             "--log-driver".into(),
             "json-file".into(),
             "--log-opt".into(),
@@ -494,6 +531,41 @@ fn normalized(bytes: &[u8]) -> String {
         .to_string()
 }
 
+/// Portarna agenten får publicera SFTPGo på: den föredragna först, sedan
+/// nästa lediga uppåt. Aldrig utanför 1–65535.
+fn candidate_ports(preferred: u16) -> Vec<u16> {
+    // u16:s saturating_add kapar redan vid 65535.
+    let last = preferred.saturating_add(PORT_CANDIDATES);
+    (preferred..=last).collect()
+}
+
+/// Värdporten SFTPGo-containern publicerar, läs ur `HostConfig.PortBindings`.
+fn published_port(raw: &str) -> Option<u16> {
+    let bindings = serde_json::from_str::<serde_json::Value>(raw.trim()).ok()?;
+
+    bindings
+        .get(format!("{SFTPGO_SFTP_PORT}/tcp"))
+        .and_then(serde_json::Value::as_array)?
+        .iter()
+        .find_map(|entry| {
+            entry
+                .get("HostPort")
+                .and_then(serde_json::Value::as_str)
+                .and_then(|port| port.parse::<u16>().ok())
+                .filter(|port| *port >= 1)
+        })
+}
+
+/// Docker:s svar när värdporten redan är tagen. Formuleringen skiljer mellan
+/// Linux och Docker Desktop, så båda tas med — allt annat är ett riktigt fel.
+fn port_unavailable(stderr: &str) -> bool {
+    let stderr = stderr.to_ascii_lowercase();
+
+    stderr.contains("port is already allocated")
+        || stderr.contains("address already in use")
+        || stderr.contains("ports are not available")
+}
+
 /// Ett lösenord som bara agenten känner, sparat i den privata state-filen.
 /// SFTPGo kräver minst 8 tecken; rcon-generatorn ger 32 hextecken.
 pub fn generate_admin_password() -> String {
@@ -538,7 +610,7 @@ mod tests {
     /// admin-API:t. Admin nås bara över Docker-nätet.
     #[test]
     fn container_args_publish_only_the_sftp_port() {
-        let args = service().container_args();
+        let args = service().container_args(2222);
         let joined = args.join(" ");
 
         assert!(joined.contains("--publish 0.0.0.0:2222:2022"), "{joined}");
@@ -578,7 +650,7 @@ mod tests {
         cfg.sftp.enabled = true;
 
         let service = SftpService::new(&cfg, "test-admin-password".to_string()).unwrap();
-        let joined = service.container_args().join(" ");
+        let joined = service.container_args(2222).join(" ");
         assert!(
             joined.contains("C:/craftpilot/servers:/srv/craftpilot/servers:rw"),
             "{joined}"
@@ -593,12 +665,15 @@ mod tests {
         service.capabilities = NodeCapabilities {
             features: vec!["sftp".to_string()],
             fingerprint: Some("SHA256:test".to_string()),
+            bound_port: Some(2223),
         };
         assert_eq!(service.capabilities().features, vec!["sftp"]);
+        assert_eq!(service.capabilities().bound_port, Some(2223));
 
         service.unavailable();
         assert!(service.capabilities().features.is_empty());
         assert!(service.capabilities().fingerprint.is_none());
+        assert!(service.capabilities().bound_port.is_none());
     }
 
     #[test]
@@ -607,6 +682,13 @@ mod tests {
         let ports = r#"{"2022/tcp":[{"HostIp":"0.0.0.0","HostPort":"2222"}]}"#;
 
         assert!(service.settings_match(DEFAULT_SFTP_IMAGE, "2", ports));
+        // En container som redan publicerar en annan port behålls: agenten
+        // valde den för att den föredragna var upptagen.
+        assert!(service.settings_match(
+            DEFAULT_SFTP_IMAGE,
+            "2",
+            r#"{"2022/tcp":[{"HostIp":"0.0.0.0","HostPort":"2223"}]}"#
+        ));
         // En gammal container (utan config-label eller med en tidigare
         // version) ska bytas ut så Ed25519-only slår igenom.
         assert!(!service.settings_match(DEFAULT_SFTP_IMAGE, "<no value>", ports));
@@ -616,12 +698,44 @@ mod tests {
     }
 
     #[test]
-    fn the_published_port_must_match_the_configuration() {
-        let service = service();
-        assert!(service
-            .publishes_expected_port(r#"{"2022/tcp":[{"HostIp":"0.0.0.0","HostPort":"2222"}]}"#));
-        assert!(!service
-            .publishes_expected_port(r#"{"2022/tcp":[{"HostIp":"0.0.0.0","HostPort":"2223"}]}"#));
-        assert!(!service.publishes_expected_port("not json"));
+    fn the_published_port_is_read_from_the_container_bindings() {
+        assert_eq!(
+            Some(2222),
+            published_port(r#"{"2022/tcp":[{"HostIp":"0.0.0.0","HostPort":"2222"}]}"#)
+        );
+        assert_eq!(
+            Some(2223),
+            published_port(r#"{"2022/tcp":[{"HostIp":"0.0.0.0","HostPort":"2223"}]}"#)
+        );
+        assert_eq!(None, published_port("{}"));
+        assert_eq!(None, published_port("not json"));
+    }
+
+    #[test]
+    fn the_configured_port_is_tried_first_and_the_next_ones_after_it() {
+        let ports = candidate_ports(2222);
+        assert_eq!(ports.first(), Some(&2222));
+        assert_eq!(ports.get(1), Some(&2223));
+        assert_eq!(ports.len(), usize::from(PORT_CANDIDATES) + 1);
+    }
+
+    #[test]
+    fn candidate_ports_never_leave_the_valid_range() {
+        assert_eq!(candidate_ports(65535), vec![65535]);
+        assert_eq!(candidate_ports(65534), vec![65534, 65535]);
+    }
+
+    #[test]
+    fn only_a_taken_host_port_moves_on_to_the_next_candidate() {
+        assert!(port_unavailable(
+            "Error response from daemon: driver failed programming external connectivity: Bind for 0.0.0.0:2222 failed: port is already allocated"
+        ));
+        assert!(port_unavailable(
+            "Error starting userland proxy: listen tcp4 0.0.0.0:2222: bind: address already in use"
+        ));
+        // Ett riktigt fel (saknad image, trasig volym) ska inte tyst byta port.
+        assert!(!port_unavailable(
+            "Unable to find image 'drakkan/sftpgo:v2.6.6' locally"
+        ));
     }
 }

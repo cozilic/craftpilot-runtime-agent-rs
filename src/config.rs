@@ -61,6 +61,8 @@ pub struct SftpSettings {
     pub enabled: bool,
     pub image: String,
     /// Porten som publiceras på nodens värd. Containerporten är alltid 2022.
+    /// Är porten upptagen på värden publicerar agenten på nästa lediga och
+    /// rapporterar den i stället (`sftp_bound_port`).
     pub port: u16,
     /// SFTPGo:s admin-API. Ligger på Docker-nätet och publiceras aldrig.
     pub admin_url: Url,

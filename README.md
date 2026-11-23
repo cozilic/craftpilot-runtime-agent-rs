@@ -156,6 +156,7 @@ A download larger than `CRAFTPILOT_MAX_UPLOAD_BYTES` is refused before anything 
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `CRAFTPILOT_MASTER_URL` | – (required) | Master origin (HTTPS, no path). The agent refuses to start without it. |
+| `CRAFTPILOT_RS_AGENT_IMAGE_TAG` | `0.10` | Image tag the compose files run. Both are read with `--env-file`, so a new image needs no new Desktop build. |
 | `CRAFTPILOT_AGENT_STATE_DIR` | `/var/lib/craftpilot-agent` | Private state directory. |
 | `CRAFTPILOT_SERVER_DATA_ROOT` | `/srv/craftpilot/servers` | Server data root (used once operations land). |
 | `CRAFTPILOT_NODE_ID` | – | Only to attach an existing node. |
@@ -171,7 +172,7 @@ A download larger than `CRAFTPILOT_MAX_UPLOAD_BYTES` is refused before anything 
 | `CRAFTPILOT_MAX_UPLOAD_BYTES` | `2147483648` | Largest upload accepted from the master (same as `server.files.max_upload_bytes`). |
 | `CRAFTPILOT_SFTP_ENABLED` | `true` | Runs the node's own SFTPGo (see [Node SFTP](#node-sftp)). `false` never reports `sftp`, so the panel hides node endpoints. |
 | `CRAFTPILOT_SFTP_IMAGE` | `drakkan/sftpgo:v2.6.6` | Exact SFTPGo image; an upgrade recreates the container but keeps its volumes. |
-| `CRAFTPILOT_SFTP_PORT` | `2222` | Host port published for SFTP (the container port is always 2022). The admin API is never published. |
+| `CRAFTPILOT_SFTP_PORT` | `2222` | Preferred host port for SFTP (the container port is always 2022). When it is taken on the host, the agent publishes on the next free one and reports it to the master as `sftp_bound_port`. The admin API is never published. |
 | `CRAFTPILOT_SFTP_ADMIN_URL` | `http://craftpilot-sftpgo:8080/` | Internal admin API origin. Must be reachable from the agent; the Docker network name is used by default. |
 | `CRAFTPILOT_SFTP_CONTAINER` | `craftpilot-sftpgo` | Container name. Config and home/data live in the volumes `<name>-config` and `<name>-data`. |
 | `CRAFTPILOT_SFTP_FILE_UID` | owner of `<data root>/<server uuid>` | Owner of files SFTPGo creates. Derived from the server directory so the game container can write them on any node; set it only to override a node with unusual ownership. |
@@ -294,8 +295,9 @@ An existing install keeps its compose file, so change `:main` to `:0.10` there o
 (`/opt/craftpilot-agent/compose.yaml`, or the panel's install directory on Windows) before pulling.
 
 Re-running `sudo ./setup.sh` does the same. On Windows the panel's **Uppdatera** button
-pulls the new image and restarts the container. To move to a new minor release, change `:0.10` to the
-new tag in the compose file (and in `setup.sh` on Linux) and repeat.
+pulls the new image and restarts the container. The tag comes from
+`CRAFTPILOT_RS_AGENT_IMAGE_TAG` (default `0.10`) in the compose files, so a new minor release is one
+line in `.env` or `.env.desktop` instead of a new Desktop build.
 
 `.github/workflows/publish-image.yml` builds the Docker image on every pull request and
 smoke-tests it without pushing. Pushes to `main` publish `main` and `sha-<commit>` tags, and a
