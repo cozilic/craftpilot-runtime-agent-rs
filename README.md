@@ -219,6 +219,12 @@ differs from the panel images. `CRAFTPILOT_SFTP_FILE_UID`/`_GID` override the de
 has one uid/gid per account, so when a user's servers have different owners the first server's
 owner is used and the node logs how many servers differ.
 
+SFTPGo reads an account when a session starts and keeps those settings for as long as the
+session lives. When the folder list of an account changes, the agent therefore sends
+`PUT /api/v2/users/{username}?disconnect=1` so the new folder is visible on the client's next
+connection without signing out and in. A change to keys, uid/gid or home directory uses a plain
+`PUT`: an open transfer must not be thrown out just because a key was rotated.
+
 Accounts are key-only: the master's password channel is disabled and not implemented here, so
 a user without a public key gets no account (never an account without an authentication
 method). Folder paths are built from the master's `server_id` only after the directory is
