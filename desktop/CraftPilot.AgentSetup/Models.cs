@@ -103,6 +103,9 @@ public sealed record PanelUpdateResult(
 /// stället för som en obestämd glidning.
 public sealed record PanelDownloadProgress(bool Active, long Received, long Total)
 {
+    /// <summary>Steget uppdateringen är i (se PanelUpdateStages), "idle" när inget kör.</summary>
+    public string Stage { get; init; } = "idle";
+
     /// <summary>0–100 när servern skickade Content-Length, annars null.</summary>
     public int? Percent => Total > 0
         ? (int)Math.Clamp(Received * 100 / Total, 0, 100)

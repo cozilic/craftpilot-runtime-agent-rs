@@ -20,6 +20,9 @@ window.CraftPilotI18n = (function () {
       'version.errorTitle': 'Kunde inte kontrollera panelversionen',
       'version.errorText': '{error} Klicka på Kontrollera igen för att försöka på nytt.',
       'version.readFailed': 'Kunde inte läsa versionsinformationen: {error}',
+      'version.stageChecking': 'Kontrollerar ny version…',
+      'version.stageFound': 'Ny version {version} hittad',
+      'version.upToDate': 'Du kör den senaste versionen',
 
       'tabs.label': 'Panelsektioner',
       'tab.main': 'Översikt',
@@ -105,6 +108,11 @@ window.CraftPilotI18n = (function () {
       'update.installedTitle': 'Panel {version} är installerad',
       'update.restarting': 'Panelen startar om…',
       'update.installedLog': 'Panel {version} installerad. Panelen startar om.',
+      'update.stageRelease': 'Hämtar versionsinformation…',
+      'update.stageDownload': 'Hämtar ny version…',
+      'update.stageVerify': 'Kontrollerar filen…',
+      'update.stageInstall': 'Installerar panelen…',
+      'update.stageRestart': 'Startar om panelen…',
 
       'docker.noticeTitle': 'Docker Desktop krävs',
       'docker.download': 'Hämta Docker Desktop',
@@ -179,6 +187,7 @@ window.CraftPilotI18n = (function () {
       'settings.sftpTitle': 'SFTP på den här noden',
       'settings.sftpHint': 'Startar SFTPGo som en egen container på noden. Avstängt betyder att filerna bara nås via panelen.',
       'settings.sftpConfirmOff': 'Stänga av SFTP? Öppna sessioner kopplas ner och SFTPGo-containern tas bort. Volymerna och värdnyckeln ligger kvar.',
+      'settings.panelUpdate': 'Ladda ner och starta om',
       'settings.checkedAt': 'Senast kontrollerad {when}',
       'settings.neverChecked': 'Inte kontrollerad ännu',
 
@@ -248,6 +257,9 @@ window.CraftPilotI18n = (function () {
       'version.errorTitle': 'Could not check the panel version',
       'version.errorText': '{error} Click Check again to try once more.',
       'version.readFailed': 'Could not read the version information: {error}',
+      'version.stageChecking': 'Checking for a new version…',
+      'version.stageFound': 'New version {version} found',
+      'version.upToDate': 'You are running the latest version',
 
       'tabs.label': 'Panel sections',
       'tab.main': 'Overview',
@@ -333,6 +345,11 @@ window.CraftPilotI18n = (function () {
       'update.installedTitle': 'Panel {version} is installed',
       'update.restarting': 'The panel is restarting…',
       'update.installedLog': 'Panel {version} installed. The panel is restarting.',
+      'update.stageRelease': 'Fetching release details…',
+      'update.stageDownload': 'Downloading the new version…',
+      'update.stageVerify': 'Checking the file…',
+      'update.stageInstall': 'Installing the panel…',
+      'update.stageRestart': 'Restarting the panel…',
 
       'docker.noticeTitle': 'Docker Desktop is required',
       'docker.download': 'Get Docker Desktop',
@@ -407,6 +424,7 @@ window.CraftPilotI18n = (function () {
       'settings.sftpTitle': 'SFTP on this node',
       'settings.sftpHint': 'Runs SFTPGo as its own container on the node. Off means the files are only reachable through the panel.',
       'settings.sftpConfirmOff': 'Turn SFTP off? Open sessions are disconnected and the SFTPGo container is removed. The volumes and the host key are kept.',
+      'settings.panelUpdate': 'Download and restart',
       'settings.checkedAt': 'Last checked {when}',
       'settings.neverChecked': 'Not checked yet',
 

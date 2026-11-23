@@ -11,6 +11,7 @@ const state = {
   installed: false,
   agentExists: false,
   updating: false,
+  checking: false,
   status: null,
   version: null,
   updateTimer: null,
@@ -104,6 +105,13 @@ function renderVersion(check) {
         : (check.checkedAt ? t('version.latest') : t('settings.neverChecked')));
   }
 
+  // Installationsknappen i Inställningar hör till samma version som bannern.
+  const installButton = $('panel-update');
+  if (installButton) {
+    installButton.hidden = !(check.updateAvailable && check.latestVersion);
+  }
+  renderUpdateResult(check);
+
   if (check.updateAvailable && check.latestVersion && check.releaseUrl) {
     banner.hidden = false;
     banner.dataset.state = 'available';
@@ -134,6 +142,32 @@ function renderVersion(check) {
   $('update-now').hidden = true;
 }
 
+// Raden under Kontrollera nu: vad den senaste kontrollen kom fram till.
+function renderUpdateResult(check) {
+  const note = $('update-result');
+  if (!note) {
+    return;
+  }
+
+  if (check.error) {
+    note.hidden = false;
+    note.dataset.state = 'error';
+    note.textContent = t('version.checkFailed');
+    return;
+  }
+
+  if (check.updateAvailable && check.latestVersion) {
+    note.hidden = false;
+    note.dataset.state = 'warn';
+    note.textContent = t('version.stageFound', { version: versionLabel(check.latestVersion) });
+    return;
+  }
+
+  note.hidden = !check.checkedAt;
+  note.dataset.state = 'ok';
+  note.textContent = check.checkedAt ? t('version.upToDate') : '';
+}
+
 async function checkVersion(force = false) {
   try {
     renderVersion(force
@@ -149,6 +183,15 @@ async function checkVersion(force = false) {
 // När panelen själv frågar GitHub styrs av Inställningar. Servern räknar ut
 // nästa tillfälle, så panelen sover tills dess i stället för att polla.
 const UPDATE_INTERVALS = ['daily', 'weekly', 'manual'];
+
+// Stegen som /api/panel-update/progress rapporterar, översatta till text i baren.
+const UPDATE_STAGE_KEYS = {
+  release: 'update.stageRelease',
+  download: 'update.stageDownload',
+  verify: 'update.stageVerify',
+  install: 'update.stageInstall',
+  restart: 'update.stageRestart',
+};
 const UPDATE_RECHECK_CAP_MS = 6 * 60 * 60 * 1000;
 
 function renderUpdateChecked(check) {
@@ -215,14 +258,28 @@ function setupUpdateSetting() {
 
   const button = $('check-update');
   if (button) {
+    // Manuell kontroll visar stegen i den gemensamma baren, som sitter ovanför
+    // flikarna och därför syns även i Inställningar.
     button.addEventListener('click', async () => {
+      if (state.busy || state.checking) {
+        return;
+      }
+
+      state.checking = true;
       button.disabled = true;
       button.textContent = t('settings.updateChecking');
+      startProgress(t('version.stageChecking'));
+
       try {
-        await checkVersion(true);
+        renderVersion(await api('/api/version/check', { method: 'POST', body: '{}' }));
+      } catch (error) {
+        renderVersion({ error: t('version.readFailed', { error: error.message }) });
       } finally {
+        state.checking = false;
         button.disabled = false;
         button.textContent = t('settings.updateNow');
+        stopProgress();
+        applyControls();
       }
     });
   }
@@ -624,6 +681,7 @@ function applyControls() {
   $('prune-servers').disabled = state.busy || !state.dockerReady;
   $('update-now').disabled = state.busy;
   $('sftp-enabled').disabled = state.busy;
+  $('panel-update').disabled = state.busy || state.checking;
   updateCardActions();
 }
 
@@ -943,7 +1001,13 @@ function setProgressDeterminate(percent) {
 async function refreshDownloadProgress() {
   try {
     const progress = await api('/api/panel-update/progress');
-    if (progress.active && progress.percent != null) {
+    const stageKey = UPDATE_STAGE_KEYS[progress.stage];
+    if (stageKey) {
+      $('progress-label').textContent = t(stageKey);
+    }
+
+    // Bara nedladdningen vet hur många byte som kommit; övriga steg är obestämda.
+    if (progress.stage === 'download' && progress.percent != null) {
       setProgressDeterminate(progress.percent);
     }
   } catch {
@@ -1020,7 +1084,7 @@ async function runPanelUpdate() {
 
   setBusy(true);
   state.updating = true;
-  startProgress(t('update.downloadLabel'));
+  startProgress(t('update.stageRelease'));
   $('update-text').textContent = t('update.downloadingText');
   $('update-now').hidden = true;
   const progressPoll = window.setInterval(refreshDownloadProgress, 400);
@@ -1041,6 +1105,7 @@ async function runPanelUpdate() {
     $('update-title').textContent = t('update.installedTitle', {
       version: versionLabel(result.version),
     });
+    $('progress-label').textContent = t('update.stageRestart');
     $('update-text').textContent = t('update.restarting');
     appendLog(t('update.installedLog', { version: versionLabel(result.version) }));
   } catch (error) {
@@ -1057,6 +1122,7 @@ async function runPanelUpdate() {
 }
 
 $('update-now').addEventListener('click', runPanelUpdate);
+$('panel-update').addEventListener('click', runPanelUpdate);
 $('refresh').addEventListener('click', () => {
   refresh(true);
   checkVersion();

@@ -275,8 +275,10 @@
           <p class="hint hint-tight" data-i18n="settings.updateHint">Panelen frågar GitHub enligt valet ovan. Med Bara manuellt händer inget förrän du klickar på Kontrollera nu.</p>
           <div class="update-check">
             <button class="button button-quiet" id="check-update" type="button" data-i18n="settings.updateNow">Kontrollera nu</button>
+            <button class="button button-primary" id="panel-update" type="button" hidden data-i18n="settings.panelUpdate">Ladda ner och starta om</button>
             <span class="muted" id="update-checked">—</span>
           </div>
+          <p class="hint hint-tight update-result" id="update-result" role="status" aria-live="polite" hidden></p>
 
           <div class="diagnostics">
             <h3 data-i18n="diagnostics.title">Felsökning</h3>

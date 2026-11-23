@@ -97,6 +97,12 @@ dem efter en omstart. **Kontrollera nu** frågar GitHub direkt, oavsett interval
 vägen när **Bara manuellt** är valt. Nästa automatiska kontroll räknas från den senaste kontrollen,
 inte från att panelen startade.
 
+**Kontrollera nu** visar vad som händer i panelens progress-bar: **Kontrollerar ny version…**, och
+sedan **Ny version v0.11.0 hittad** under knappen. Finns en nyare version blir **Ladda ner och
+starta om** synlig på samma rad — den laddar ner exen och visar **Hämtar versionsinformation…**,
+**Hämtar ny version…** (med procent), **Kontrollerar filen…**, **Installerar panelen…** och
+**Startar om panelen…**. Samma knapp finns i bannern i Översikt.
+
 ## Tray och automatisk start
 
 Panelen har en tray-ikon som visar om Docker, mastern och agenten är redo. Stäng fönstret med

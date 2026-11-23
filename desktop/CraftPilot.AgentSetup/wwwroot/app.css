@@ -705,6 +705,24 @@ h1 span {
   margin-bottom: 14px;
 }
 
+/* Raden som säger vad den manuella versionskontrollen kom fram till. Två
+   klasser behövs för att slå .hint längre ner i filen. */
+.hint.update-result {
+  margin: -6px 0 14px;
+}
+
+.hint.update-result[data-state="ok"] {
+  color: var(--ok);
+}
+
+.hint.update-result[data-state="warn"] {
+  color: var(--warn);
+}
+
+.hint.update-result[data-state="error"] {
+  color: var(--bad);
+}
+
 .field input::placeholder {
   color: var(--faint);
 }
