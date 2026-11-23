@@ -402,9 +402,7 @@ impl SftpService {
     }
 
     async fn remove_container(&mut self) -> Result<()> {
-        let output = self
-            .docker(&["rm", "--force", &self.container_name])
-            .await?;
+        let output = self.docker(&removal_args(&self.container_name)).await?;
         if !output.status.success() && !is_missing_container(&output) {
             return Err(AgentError::Runtime(format!(
                 "docker rm for sftpgo failed: {}",
@@ -520,8 +518,46 @@ impl SftpService {
 }
 
 fn is_missing_container(output: &Output) -> bool {
-    normalized(&output.stderr).contains("No such container")
-        || normalized(&output.stderr).contains("No such object")
+    missing_container_message(&output.stderr)
+}
+
+/// Docker säger så här när containern redan är borta; det är inget fel.
+fn missing_container_message(stderr: &[u8]) -> bool {
+    let text = normalized(stderr);
+    text.contains("No such container") || text.contains("No such object")
+}
+
+/// Argumenten för att ta bort SFTPGo. Bara containern, aldrig volymerna:
+/// hostnyckeln och databasen ska bestå, annars byter noden värdnyckel nästa
+/// gång SFTP slås på.
+fn removal_args(container: &str) -> [&str; 3] {
+    ["rm", "--force", container]
+}
+
+/// Tar bort SFTPGo när SFTP är avstängt på noden. Containern kör med
+/// `--restart unless-stopped`, så den överlever att agenten slutar rapportera
+/// `sftp` — utan den här städningen fortsätter den servera filer på porten
+/// trots att panelen tror att SFTP är av. `Ok(false)` betyder att ingen
+/// container fanns att ta bort.
+pub async fn remove_disabled_container(container: &str) -> Result<bool> {
+    let output = ProcessCommand::new("docker")
+        .args(removal_args(container))
+        .output()
+        .await
+        .map_err(|err| AgentError::Runtime(format!("docker rm for sftpgo failed: {err}")))?;
+
+    if output.status.success() {
+        return Ok(true);
+    }
+
+    if is_missing_container(&output) {
+        return Ok(false);
+    }
+
+    Err(AgentError::Runtime(format!(
+        "docker rm for sftpgo failed: {}",
+        normalized(&output.stderr)
+    )))
 }
 
 fn normalized(bytes: &[u8]) -> String {
@@ -597,6 +633,26 @@ mod tests {
             admin_username: "craftpilot-agent".to_string(),
         };
         SftpService::new(&cfg, "test-admin-password".to_string()).unwrap()
+    }
+
+    #[test]
+    fn the_sftpgo_removal_keeps_the_volumes() {
+        // Bara containern tas bort: `-v` hade slängt hostnyckeln.
+        assert_eq!(
+            removal_args("craftpilot-sftpgo"),
+            ["rm", "--force", "craftpilot-sftpgo"]
+        );
+    }
+
+    #[test]
+    fn a_missing_container_is_recognised_by_dockers_message() {
+        assert!(missing_container_message(
+            b"Error: No such container: craftpilot-sftpgo\n"
+        ));
+        assert!(missing_container_message(
+            b"Error: No such object: craftpilot-sftpgo"
+        ));
+        assert!(!missing_container_message(b"permission denied"));
     }
 
     #[test]

@@ -102,9 +102,26 @@ impl Agent {
     }
 
     pub async fn run(mut self) -> Result<()> {
+        self.remove_disabled_sftp().await;
         self.file_tree.start();
         self.start_session().await?;
         self.main_loop().await
+    }
+
+    /// SFTP kan ha varit påslaget tidigare. Containern kör med restart-policy,
+    /// så den måste tas bort när flaggan är av — annars fortsätter den servera
+    /// filer på porten medan noden slutat rapportera \`sftp\`. Volymerna lämnas
+    /// så värdnyckeln består.
+    async fn remove_disabled_sftp(&self) {
+        if self.cfg.sftp.enabled {
+            return;
+        }
+
+        match crate::sftp::remove_disabled_container(&self.cfg.sftp.container_name).await {
+            Ok(true) => info!("sftp is disabled: removed the leftover sftpgo container"),
+            Ok(false) => {}
+            Err(err) => warn!(error = %err, "could not remove the leftover sftpgo container"),
+        }
     }
 
     /// Startar en session: säkerställ credential och en accepterad handshake.

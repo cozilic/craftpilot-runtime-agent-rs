@@ -257,6 +257,7 @@ public sealed class AgentSetupService
             // Ingen container: agenten är inte installerad, eller så är SFTP avstängt.
             return new SftpStatus
             {
+                Enabled = enabled,
                 PreferredPort = preferred,
                 Error = enabled ? FirstLine(inspect.Combined) : null,
             };
@@ -271,6 +272,7 @@ public sealed class AgentSetupService
 
         return new SftpStatus
         {
+            Enabled = enabled,
             PreferredPort = preferred,
             BoundPort = bound,
             Running = running,
@@ -305,6 +307,10 @@ public sealed class AgentSetupService
     /// <summary>Startar om en servercontainer som panelen själv har hittat via labeln.</summary>
     public Task<OperationResponse> RestartServerAsync(string serverId, CancellationToken ct = default) =>
         RunOperationAsync((output, token) => RestartServerCoreAsync(serverId, output, token), ct);
+
+    /// <summary>Slår SFTP på eller av på noden och startar om agenten med den nya flaggan.</summary>
+    public Task<OperationResponse> SetSftpEnabledAsync(bool enabled, CancellationToken ct = default) =>
+        RunOperationAsync((output, token) => SetSftpEnabledCoreAsync(enabled, output, token), ct);
 
     /// Kör en åtgärd med operation-lås, busy-flagga och Avbryt-stöd. Alla
     /// åtgärder går genom den här vägen, så panelen aldrig kan fastna i ett
@@ -343,6 +349,67 @@ public sealed class AgentSetupService
         }
     }
 
+    /// <summary>
+    /// Skriver CRAFTPILOT_SFTP_ENABLED i .env.desktop och återskapar
+    /// agentcontainern, som läser flaggan vid start. Är flaggan av tar agenten
+    /// bort SFTPGo-containern men lämnar volymerna, så värdnyckeln består.
+    /// </summary>
+    private async Task<OperationResponse> SetSftpEnabledCoreAsync(
+        bool enabled,
+        StringBuilder output,
+        CancellationToken ct)
+    {
+        if (!File.Exists(EnvPath))
+        {
+            return Fail("Agenten är inte installerad ännu.", output);
+        }
+
+        try
+        {
+            var existing = await File.ReadAllTextAsync(EnvPath, ct);
+            await File.WriteAllTextAsync(
+                EnvPath,
+                DesktopConfig.BuildEnvFile(ReadSavedDataDir(), enabled, existing),
+                new UTF8Encoding(false),
+                ct);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return Fail($"Kunde inte skriva {EnvFileName}: {ex.Message}", output);
+        }
+
+        output.AppendLine(enabled
+            ? $"{DesktopConfig.SftpEnabledKey}=true i {EnvFileName}."
+            : $"{DesktopConfig.SftpEnabledKey}=false i {EnvFileName}.");
+
+        if (!File.Exists(ComposePath))
+        {
+            // Ingen compose-fil: nästa installation använder den sparade flaggan.
+            return new OperationResponse(true, output.ToString().Trim(), null, await GetStatusAsync(ct));
+        }
+
+        var docker = await CheckDockerAsync(ct);
+        if (docker.State != DockerStateClassifier.Ready)
+        {
+            return Fail(DockerGuidance(docker.State), output);
+        }
+
+        // Agenten läser flaggan vid start, så containern återskapas med den nya
+        // miljön. State-volymen och serverdatan behålls.
+        var up = await ComposeAsync(
+            ["up", "-d", "--force-recreate", "agent"],
+            TimeSpan.FromMinutes(5),
+            ct);
+        Append(output, up);
+        if (up.ExitCode != 0)
+        {
+            return Fail("Kunde inte starta om agenten med den nya inställningen.", output);
+        }
+
+        await Task.Delay(TimeSpan.FromSeconds(2.5), ct);
+        return new OperationResponse(true, output.ToString().Trim(), null, await GetStatusAsync(ct));
+    }
+
     private async Task<OperationResponse> InstallCoreAsync(
         InstallRequest request,
         StringBuilder output,
@@ -378,9 +445,13 @@ public sealed class AgentSetupService
         }
 
         WriteCompose();
+        var existingEnv = File.Exists(EnvPath) ? await File.ReadAllTextAsync(EnvPath, ct) : null;
         await File.WriteAllTextAsync(
             EnvPath,
-            DesktopConfig.BuildEnvFile(dataDirectory),
+            DesktopConfig.BuildEnvFile(
+                dataDirectory,
+                DesktopConfig.ReadSftpEnabled(existingEnv),
+                existingEnv),
             new UTF8Encoding(false),
             ct);
 
@@ -416,9 +487,13 @@ public sealed class AgentSetupService
             return Fail("Agenten är inte installerad ännu.", output);
         }
 
+        var existingEnv = await File.ReadAllTextAsync(EnvPath, ct);
         await File.WriteAllTextAsync(
             EnvPath,
-            DesktopConfig.BuildEnvFile(ReadSavedDataDir()),
+            DesktopConfig.BuildEnvFile(
+                ReadSavedDataDir(),
+                DesktopConfig.ReadSftpEnabled(existingEnv),
+                existingEnv),
             new UTF8Encoding(false),
             ct);
 

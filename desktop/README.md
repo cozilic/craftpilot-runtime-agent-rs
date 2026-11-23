@@ -65,6 +65,12 @@ Porten läses ur Docker, inte ur `.env.desktop`: agenten tar nästa lediga port 
 `CRAFTPILOT_SFTP_PORT` är upptagen, och då står den önskade porten som en rad under kortet.
 Samma uppgifter finns i diagnosfilen under `[SFTP]`.
 
+Under **Inställningar → SFTP på den här noden** slås nodens SFTP av och på. Panelen skriver
+`CRAFTPILOT_SFTP_ENABLED` i `.env.desktop` och återskapar agentcontainern; rader panelen inte
+äger, t.ex. `CRAFTPILOT_RS_AGENT_IMAGE_TAG`, lämnas orörda. Är flaggan av tar agenten bort
+`craftpilot-sftpgo` — volymerna ligger kvar, så värdnyckeln och SFTPGo-databasen består och
+nästa påslag återanvänder dem.
+
 Servrar som skapats i panelen men ännu inte startats listas också under **Servrar på den här
 noden**, med status **Inte startad**. De har en katalog i serverdata-mappen men ingen container
 ännu; **Rensa stoppade** rör dem inte.

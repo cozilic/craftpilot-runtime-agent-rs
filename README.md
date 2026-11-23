@@ -170,7 +170,7 @@ A download larger than `CRAFTPILOT_MAX_UPLOAD_BYTES` is refused before anything 
 | `CRAFTPILOT_DATA_GID` | `33` | Group that staged server files are shared with (Minecraft's GID in the panel images). |
 | `CRAFTPILOT_MAX_EDIT_BYTES` | `4194304` | Largest file the editor may read or write (same as the master's `server.files.max_edit_bytes`). |
 | `CRAFTPILOT_MAX_UPLOAD_BYTES` | `2147483648` | Largest upload accepted from the master (same as `server.files.max_upload_bytes`). |
-| `CRAFTPILOT_SFTP_ENABLED` | `true` | Runs the node's own SFTPGo (see [Node SFTP](#node-sftp)). `false` never reports `sftp`, so the panel hides node endpoints. |
+| `CRAFTPILOT_SFTP_ENABLED` | `true` | Runs the node's own SFTPGo (see [Node SFTP](#node-sftp)). `false` removes the container a previous run created — the volumes stay, so the host key and database survive — and never reports `sftp`, so the panel hides node endpoints. The desktop panel has the same flag as a switch under Settings. |
 | `CRAFTPILOT_SFTP_IMAGE` | `drakkan/sftpgo:v2.6.6` | Exact SFTPGo image; an upgrade recreates the container but keeps its volumes. |
 | `CRAFTPILOT_SFTP_PORT` | `2222` | Preferred host port for SFTP (the container port is always 2022). When it is taken on the host, the agent publishes on the next free one and reports it to the master as `sftp_bound_port`. The admin API is never published. |
 | `CRAFTPILOT_SFTP_ADMIN_URL` | `http://craftpilot-sftpgo:8080/` | Internal admin API origin. Must be reachable from the agent; the Docker network name is used by default. |

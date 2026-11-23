@@ -235,6 +235,14 @@
             Rust-agenten kör servrarna som Docker-containrar, så Docker Desktop måste vara igång – det finns ingen Docker-fri start.</span>
           </p>
 
+          <label class="check-row" for="sftp-enabled">
+            <input id="sftp-enabled" type="checkbox">
+            <span>
+              <strong data-i18n="settings.sftpTitle">SFTP på den här noden</strong>
+              <small data-i18n="settings.sftpHint">Startar SFTPGo som en egen container på noden. Avstängt betyder att filerna bara nås via panelen.</small>
+            </span>
+          </label>
+
           <label class="field field-language" for="language">
             <span data-i18n="settings.language">Språk</span>
             <select id="language" name="language">

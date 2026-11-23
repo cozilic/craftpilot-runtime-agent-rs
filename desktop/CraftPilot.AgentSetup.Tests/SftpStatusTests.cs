@@ -55,6 +55,13 @@ public sealed class SftpStatusTests
     }
 
     [Fact]
+    public void Sftp_is_enabled_unless_the_env_says_otherwise()
+    {
+        Assert.True(new SftpStatus().Enabled);
+        Assert.False(new SftpStatus { Enabled = false }.Enabled);
+    }
+
+    [Fact]
     public void MovedFromPreferred_tells_when_the_agent_took_another_port()
     {
         Assert.True(new SftpStatus { PreferredPort = 2222, BoundPort = 2223 }.MovedFromPreferred);
