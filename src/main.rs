@@ -11,6 +11,8 @@ mod migrations;
 mod model;
 mod ping;
 mod rcon;
+mod sftp;
+mod sftpgo;
 mod snapshot;
 mod state;
 mod telemetry;

@@ -15,8 +15,9 @@ use crate::error::{AgentError, Result};
 use crate::file_tree::{FileTreeIndex, SYNC_BATCH};
 use crate::files::Files;
 use crate::migrations::Migrations;
-use crate::model::{AckRequest, Command};
+use crate::model::{AckRequest, Command, NodeCapabilities};
 use crate::rcon;
+use crate::sftp::SftpService;
 use crate::snapshot::Snapshotter;
 use crate::state::StateStore;
 use crate::telemetry::{Artifact, Reporter};
@@ -36,6 +37,9 @@ pub struct Agent {
     files: Files,
     file_tree: Arc<FileTreeIndex>,
     migrations: Migrations,
+    /// Nodens egen SFTPGo. `None` när funktionen är avstängd med
+    /// `CRAFTPILOT_SFTP_ENABLED=false`; agenten rapporterar då aldrig `sftp`.
+    sftp: Option<SftpService>,
     reporter: Reporter,
     last_report: Option<Instant>,
     assigned_servers: BTreeSet<String>,
@@ -45,8 +49,14 @@ pub struct Agent {
 
 impl Agent {
     pub fn new(cfg: Config) -> Result<Self> {
-        let store = StateStore::open(&cfg.state_dir)?;
+        let mut store = StateStore::open(&cfg.state_dir)?;
         let api = MasterClient::new(cfg.master_url.clone())?;
+        let sftp = if cfg.sftp.enabled {
+            let password = ensure_sftp_admin_password(&mut store)?;
+            Some(SftpService::new(&cfg, password)?)
+        } else {
+            None
+        };
         let docker = Docker::new(
             cfg.server_data_root.clone(),
             cfg.docker_data_root.clone().map(std::path::PathBuf::from),
@@ -82,6 +92,7 @@ impl Agent {
             files,
             file_tree,
             migrations,
+            sftp,
             reporter: Reporter::new(),
             last_report: None,
             assigned_servers: BTreeSet::new(),
@@ -173,9 +184,13 @@ impl Agent {
             .clone()
             .ok_or(AgentError::Unauthorized)?;
         let sequence = self.store.next_sequence()?;
+        // Förmågorna rapporteras först när SFTPGo faktiskt svarar; före
+        // första synken är listan tom, vilket också rensar ett gammalt
+        // `sftp` från en tidigare process.
+        let capabilities = NodeCapabilities::default();
         let heartbeat = self
             .api
-            .heartbeat(&node_id, sequence, self.uptime_seconds())
+            .heartbeat(&node_id, sequence, self.uptime_seconds(), &capabilities)
             .await?;
         info!(
             agent_version = %heartbeat.agent_version,
@@ -514,10 +529,15 @@ impl Agent {
             .node_id
             .clone()
             .ok_or(AgentError::Unauthorized)?;
+        // Förmågorna från förra pollens SFTP-synk. En långsam första
+        // image-pull får aldrig fördröja ett redan claimat kommando, så
+        // själva synken körs efter kommandot i stället.
+        let capabilities = self.sftp_capabilities();
+
         let sequence = self.store.next_sequence()?;
         let claim = self
             .api
-            .claim(&node_id, sequence, self.uptime_seconds())
+            .claim(&node_id, sequence, self.uptime_seconds(), &capabilities)
             .await?;
 
         // Nodens namn kommer med varje claim (node_settings) — spara det när
@@ -541,6 +561,7 @@ impl Agent {
         self.sync_file_tree(&assigned).await;
 
         let Some(command) = claim.command else {
+            self.refresh_sftp().await;
             return Ok(());
         };
 
@@ -559,6 +580,11 @@ impl Agent {
         if urgent && !report_due {
             self.report_servers().await;
         }
+        // SFTP-state synkas efter kommandot: nästa claim bär `sftp` och
+        // värdnyckeln så snart SFTPGo svarar. Fel här stoppar aldrig
+        // kommandoflödet — panelen slutar bara lova SFTP-slutpunkten.
+        self.refresh_sftp().await;
+
         match result {
             Ok(_) => Ok(()),
             Err(AgentError::Conflict(body)) => {
@@ -1223,6 +1249,36 @@ impl Agent {
         assigned
     }
 
+    /// Det förra pollens SFTP-synk kom fram till. Utan tjänst (avstängd
+    /// eller första pollen ännu inte körd) rapporteras inga förmågor.
+    fn sftp_capabilities(&self) -> NodeCapabilities {
+        self.sftp
+            .as_ref()
+            .map(SftpService::capabilities)
+            .unwrap_or_default()
+    }
+
+    /// Kör SFTP-synken och returnerar det som får rapporteras. Ett fel
+    /// loggas och degraderar tjänsten: inga `sftp`-features, ingen ny
+    /// värdnyckel — mastern behåller den gamla tills SFTPGo svarar igen.
+    async fn refresh_sftp(&mut self) -> NodeCapabilities {
+        let Some(node_id) = self.store.state().node_id.clone() else {
+            return NodeCapabilities::default();
+        };
+        let Some(sftp) = self.sftp.as_mut() else {
+            return NodeCapabilities::default();
+        };
+
+        match sftp.refresh(&node_id, &self.api).await {
+            Ok(()) => sftp.capabilities(),
+            Err(err) => {
+                warn!(error = %err, "node sftp is unavailable");
+                sftp.unavailable();
+                NodeCapabilities::default()
+            }
+        }
+    }
+
     fn forget_credential(&mut self) -> Result<()> {
         {
             let state = self.store.state_mut();
@@ -1234,6 +1290,20 @@ impl Agent {
         self.api.set_credential(None);
         Ok(())
     }
+}
+
+/// SFTPGo:s admin-lösenord genereras en gång och ligger bara i den privata
+/// state-filen. Det är agentens egen credential mot den lokala SFTPGo:n,
+/// inte en användarhemlighet.
+fn ensure_sftp_admin_password(store: &mut StateStore) -> Result<String> {
+    if let Some(password) = store.state().sftp_admin_password.clone() {
+        return Ok(password);
+    }
+
+    let password = crate::sftp::generate_admin_password();
+    store.state_mut().sftp_admin_password = Some(password.clone());
+    store.save()?;
+    Ok(password)
 }
 
 /// Nätverksräknarna (2026-11-20): containerns kumulativa byte, aldrig en

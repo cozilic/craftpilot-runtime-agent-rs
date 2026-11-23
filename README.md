@@ -120,6 +120,15 @@ the Python agent — no master changes are required to run it side by side.
   private staging directory. The result is installed with one atomic rename into a missing or
   empty `<data root>/<server uuid>`; a non-empty destination is refused, never overwritten.
   Answers `SNAPSHOT_STAGED` with the verified digest and byte count the master checks.
+- **NODE SFTP** (`features: ["sftp"]`): the agent runs its own SFTPGo container on the
+  node's Docker network and applies the full state from `GET /api/runtime/nodes/{node}/sftp`
+  — one key-only account per `u<id>`, one virtual folder per server mounted at `/<slug>`,
+  and every folder is validated against the server data root (UUID, directory, no symlink
+  escape) before it is mapped. Accounts and folders that leave the master's state are
+  removed. Only when the SFTPGo admin API answers does the agent report `sftp` and the SSH
+  host-key fingerprint (Ed25519 preferred) in heartbeat/claim; a stopped or broken SFTPGo
+  stops being advertised instead of leaving a dead endpoint in the panel. The admin API is
+  never published — only the SFTP port is.
 - **Bounded container logs**: every game container runs with the Docker `json-file` driver
   capped at 10 MiB × 5 files, so a chatty server can no longer fill the node's disk. Console
   delivery still uses a timestamp cursor and keeps its 400-line window.
@@ -158,11 +167,59 @@ A download larger than `CRAFTPILOT_MAX_UPLOAD_BYTES` is refused before anything 
 | `CRAFTPILOT_DATA_GID` | `33` | Group that staged server files are shared with (Minecraft's GID in the panel images). |
 | `CRAFTPILOT_MAX_EDIT_BYTES` | `4194304` | Largest file the editor may read or write (same as the master's `server.files.max_edit_bytes`). |
 | `CRAFTPILOT_MAX_UPLOAD_BYTES` | `2147483648` | Largest upload accepted from the master (same as `server.files.max_upload_bytes`). |
+| `CRAFTPILOT_SFTP_ENABLED` | `true` | Runs the node's own SFTPGo (see [Node SFTP](#node-sftp)). `false` never reports `sftp`, so the panel hides node endpoints. |
+| `CRAFTPILOT_SFTP_IMAGE` | `drakkan/sftpgo:v2.6.6` | Exact SFTPGo image; an upgrade recreates the container but keeps its volumes. |
+| `CRAFTPILOT_SFTP_PORT` | `2222` | Host port published for SFTP (the container port is always 2022). The admin API is never published. |
+| `CRAFTPILOT_SFTP_ADMIN_URL` | `http://craftpilot-sftpgo:8080/` | Internal admin API origin. Must be reachable from the agent; the Docker network name is used by default. |
+| `CRAFTPILOT_SFTP_CONTAINER` | `craftpilot-sftpgo` | Container name. Config and home/data live in the volumes `<name>-config` and `<name>-data`. |
+| `CRAFTPILOT_SFTP_FILE_UID` | `33` | Owner of files SFTPGo creates. Match the runtime user of the game containers. |
+| `CRAFTPILOT_SFTP_FILE_GID` | `CRAFTPILOT_DATA_GID` (33) | Group of files SFTPGo creates. |
 | `RUST_LOG` | `info` | Log filter. Console text, credentials and RCON passwords are never logged. |
 
 There is no built-in master default: a bare `docker run` without
 `CRAFTPILOT_MASTER_URL` exits with a configuration error instead of enrolling against
 production.
+
+## Node SFTP
+
+The master owns permission; the agent owns location. A server that runs on a node can be
+reached on the node's own SFTP endpoint instead of the master's, so the files never have to
+be mirrored (`docs/RUNTIME-NODE-SFTP.md` in the CraftPilot repository).
+
+The agent runs one SFTPGo container per node (not per server), joined to
+`CRAFTPILOT_DOCKER_NETWORK`, with root inside the container because the server directories
+belong to the game containers. Its SQLite database and SSH host keys live in the Docker
+volume `<CRAFTPILOT_SFTP_CONTAINER>-config`, the (empty) user homes in
+`<CRAFTPILOT_SFTP_CONTAINER>-data`, and the server data root is mounted read-write at
+`/srv/craftpilot/servers`. Only the SFTP port is published; the admin API — and the admin
+password, which is generated once and stored in the agent's `0600` state file — never leaves
+the Docker network.
+
+Every poll:
+
+1. the agent ensures the container runs (creating or recreating it when the image or port
+   changed, with volumes kept),
+2. it reads `GET /api/runtime/nodes/{node}/sftp` and applies the full state when the revision
+   changed — folders first, then accounts, then removal of accounts/folders that left the
+   state,
+3. it reports `features: ["sftp"]` and the Ed25519 host-key fingerprint only when the admin
+   API answers, so a stopped SFTPGo is never advertised as a working endpoint.
+
+Accounts are key-only: the master's password channel is disabled and not implemented here, so
+a user without a public key gets no account (never an account without an authentication
+method). Folder paths are built from the master's `server_id` only after the directory is
+confirmed to be a real directory under the data root — a symlink or a path outside the root
+is skipped, never mounted.
+
+If the SFTPGo admin password and its config volume get out of sync (for example after the
+volume was deleted but the agent state kept), the admin API answers `401` and the agent logs
+`sftpgo token request failed` without advertising `sftp`. Remove both volumes and restart the
+agent to re-provision SFTPGo:
+
+```sh
+docker rm -f craftpilot-sftpgo
+docker volume rm craftpilot-sftpgo-config craftpilot-sftpgo-data
+```
 
 ## Run locally
 

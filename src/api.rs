@@ -9,8 +9,9 @@ use crate::build_info::AGENT_VERSION;
 use crate::error::{AgentError, Result};
 use crate::model::{
     AckRequest, ClaimResponse, EnrollmentCreated, EnrollmentPoll, HeartbeatResponse,
-    RegisterResponse, StatusResponse,
+    NodeCapabilities, RegisterResponse, StatusResponse,
 };
+use crate::sftpgo::SftpState;
 
 /// Tunn klient mot masterns `/api/runtime/...`-endpoints. Inga redirects
 /// följs (samma regel som Python-agenten), och credentialen skickas bara
@@ -195,14 +196,16 @@ impl MasterClient {
         node_id: &str,
         sequence: i64,
         uptime_seconds: u64,
+        capabilities: &NodeCapabilities,
     ) -> Result<HeartbeatResponse> {
-        let body = serde_json::json!({
+        let mut body = serde_json::json!({
             "sequence": sequence,
             "uptime_seconds": uptime_seconds,
             // Versionen följer med varje poll, så en uppgraderad nod syns i
             // admin utan omregistrering.
             "agent_version": AGENT_VERSION,
         });
+        insert_capabilities(&mut body, capabilities);
         self.request(
             Method::POST,
             &format!("api/runtime/nodes/{node_id}/heartbeat"),
@@ -219,12 +222,14 @@ impl MasterClient {
         node_id: &str,
         sequence: i64,
         uptime_seconds: u64,
+        capabilities: &NodeCapabilities,
     ) -> Result<ClaimResponse> {
-        let body = serde_json::json!({
+        let mut body = serde_json::json!({
             "sequence": sequence,
             "uptime_seconds": uptime_seconds,
             "agent_version": AGENT_VERSION,
         });
+        insert_capabilities(&mut body, capabilities);
         self.request(
             Method::POST,
             &format!("api/runtime/nodes/{node_id}/commands/claim"),
@@ -256,6 +261,18 @@ impl MasterClient {
             });
         }
         Ok(response)
+    }
+
+    /// Masterns önskade SFTP-läge: hela listan med konton, nycklar och
+    /// servermappar för den här noden. Lösenord ingår aldrig.
+    pub async fn sftp_state(&self, node_id: &str) -> Result<SftpState> {
+        self.request(
+            Method::GET,
+            &format!("api/runtime/nodes/{node_id}/sftp"),
+            None::<&Value>,
+            true,
+        )
+        .await
     }
 
     /// Servrarna som är tilldelade den här noden (`servers` + `artifacts`).
@@ -549,6 +566,16 @@ impl MasterClient {
             true,
         )
         .await
+    }
+}
+
+/// Förmågorna följer med varje poll. `features` skickas alltid (även tom),
+/// så en nod som tappar sin SFTPGo slutar lova en slutpunkt. Ett utelämnat
+/// fingeravtryck behåller masterns sparade värde.
+fn insert_capabilities(body: &mut Value, capabilities: &NodeCapabilities) {
+    body["features"] = serde_json::json!(capabilities.features);
+    if let Some(fingerprint) = capabilities.fingerprint.as_deref() {
+        body["sftp_host_key_fingerprint"] = serde_json::json!(fingerprint);
     }
 }
 
