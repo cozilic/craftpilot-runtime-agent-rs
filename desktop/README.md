@@ -93,7 +93,7 @@ inloggning. Då visas bara tray-ikonen; panelens fönster skapas först när du 
 inställning finns i tray-menyn.
 
 **Avbryt** avbryter en pågående åtgärd (installation, uppdatering, stopp eller borttagning).
-**Uppdatera** hämtar den image som compose-filen pekar på (`:0.10`) och startar om agenten. **Stoppa** stoppar
+**Uppdatera** hämtar den image som compose-filen pekar på (`:0.11`) och startar om agenten. **Stoppa** stoppar
 containern men behåller både serverdata och agentens state. **Ta bort** tar bort containern och
 panelens installationsfiler (`.env.desktop` och `compose.desktop.yaml`); serverdata, agentens
 state-volym och nodens credential ligger kvar, så nästa installation återansluter samma nod.
