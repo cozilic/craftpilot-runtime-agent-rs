@@ -43,6 +43,11 @@ pub struct AgentState {
     /// hela loggfönstret till panelen.
     #[serde(default)]
     pub log_cursors: BTreeMap<String, String>,
+    /// Lösenordet för nodens lokala SFTPGo-admin. Genereras en gång och
+    /// skrivs bara till den privata state-filen (0600) — det är agentens
+    /// enda väg in i SFTPGo:s admin-API och aldrig en användarhemlighet.
+    #[serde(default)]
+    pub sftp_admin_password: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

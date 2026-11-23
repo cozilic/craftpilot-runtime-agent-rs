@@ -47,7 +47,34 @@ pub struct Config {
     pub max_edit_bytes: u64,
     /// Samma gräns som masterns `server.files.max_upload_bytes`.
     pub max_upload_bytes: u64,
+    /// Nodens egen SFTP (docs/RUNTIME-NODE-SFTP.md).
+    pub sftp: SftpSettings,
 }
+
+/// Inställningar för nodens SFTPGo. Mastern äger *vad* som får finnas;
+/// agenten äger *var* det finns och startar därför en egen SFTPGo per nod.
+#[derive(Debug, Clone)]
+pub struct SftpSettings {
+    /// Av som default? Nej: en nod som uppgraderas ska börja erbjuda SFTP
+    /// utan en extra flagga, och mastern visar bara slutpunkten när agenten
+    /// faktiskt rapporterar `sftp`.
+    pub enabled: bool,
+    pub image: String,
+    /// Porten som publiceras på nodens värd. Containerporten är alltid 2022.
+    pub port: u16,
+    /// SFTPGo:s admin-API. Ligger på Docker-nätet och publiceras aldrig.
+    pub admin_url: Url,
+    pub container_name: String,
+    /// Filer SFTPGo skapar tilldelas den här uid/gid. Samma som
+    /// spelcontainrarna i panelens images (CRAFTPILOT_DATA_GID).
+    pub file_uid: u32,
+    pub file_gid: u32,
+    pub admin_username: String,
+}
+
+pub const DEFAULT_SFTP_IMAGE: &str = "drakkan/sftpgo:v2.6.6";
+pub const DEFAULT_SFTP_CONTAINER: &str = "craftpilot-sftpgo";
+pub const DEFAULT_SFTP_ADMIN_USERNAME: &str = "craftpilot-agent";
 
 impl Config {
     /// Minimal konfiguration för agenttesterna: bara masterns adress och
@@ -73,6 +100,18 @@ impl Config {
             max_edit_bytes: 1024 * 1024,
             max_upload_bytes: 4 * 1024 * 1024,
             state_dir,
+            // Testerna ska inte starta en riktig SFTPGo; modulerna testas
+            // direkt mot en mockad admin-API.
+            sftp: SftpSettings {
+                enabled: false,
+                image: DEFAULT_SFTP_IMAGE.to_string(),
+                port: 2222,
+                admin_url: Url::parse("http://craftpilot-sftpgo:8080/").unwrap(),
+                container_name: DEFAULT_SFTP_CONTAINER.to_string(),
+                file_uid: 33,
+                file_gid: 33,
+                admin_username: DEFAULT_SFTP_ADMIN_USERNAME.to_string(),
+            },
         }
     }
 
@@ -110,6 +149,36 @@ impl Config {
             ));
         }
 
+        let sftp_enabled = parse_bool("CRAFTPILOT_SFTP_ENABLED", true)?;
+        let sftp_image = env_or("CRAFTPILOT_SFTP_IMAGE", DEFAULT_SFTP_IMAGE);
+        if sftp_image.is_empty()
+            || sftp_image.len() > 255
+            || sftp_image.chars().any(char::is_whitespace)
+        {
+            return Err(AgentError::Config(
+                "CRAFTPILOT_SFTP_IMAGE is not a valid image reference".into(),
+            ));
+        }
+        let sftp_port = parse_u64("CRAFTPILOT_SFTP_PORT", 2222)?;
+        if !(1..=65535).contains(&sftp_port) {
+            return Err(AgentError::Config(
+                "CRAFTPILOT_SFTP_PORT must be 1-65535".into(),
+            ));
+        }
+        let sftp_container_name = env_or("CRAFTPILOT_SFTP_CONTAINER", DEFAULT_SFTP_CONTAINER);
+        if !is_docker_name(&sftp_container_name) {
+            return Err(AgentError::Config(
+                "CRAFTPILOT_SFTP_CONTAINER is not a valid Docker container name".into(),
+            ));
+        }
+        let sftp_admin_url = parse_sftp_admin_url(&env_or(
+            "CRAFTPILOT_SFTP_ADMIN_URL",
+            "http://craftpilot-sftpgo:8080/",
+        ))?;
+        let data_gid = parse_u32("CRAFTPILOT_DATA_GID", 33)?;
+        let sftp_file_gid = parse_u32("CRAFTPILOT_SFTP_FILE_GID", data_gid)?;
+        let sftp_file_uid = parse_u32("CRAFTPILOT_SFTP_FILE_UID", 33)?;
+
         Ok(Self {
             master_url,
             node_id: optional_env("CRAFTPILOT_NODE_ID"),
@@ -131,9 +200,19 @@ impl Config {
             stop_grace_seconds,
             docker_data_root: optional_env("CRAFTPILOT_DOCKER_SERVER_DATA_ROOT")
                 .map(|root| root.trim_end_matches(['/', '\\']).to_string()),
-            data_gid: parse_u32("CRAFTPILOT_DATA_GID", 33)?,
+            data_gid,
             max_edit_bytes: parse_u64("CRAFTPILOT_MAX_EDIT_BYTES", 4 * 1024 * 1024)?,
             max_upload_bytes: parse_u64("CRAFTPILOT_MAX_UPLOAD_BYTES", 2 * 1024 * 1024 * 1024)?,
+            sftp: SftpSettings {
+                enabled: sftp_enabled,
+                image: sftp_image,
+                port: sftp_port as u16,
+                admin_url: sftp_admin_url,
+                container_name: sftp_container_name,
+                file_uid: sftp_file_uid,
+                file_gid: sftp_file_gid,
+                admin_username: DEFAULT_SFTP_ADMIN_USERNAME.to_string(),
+            },
         })
     }
 }
@@ -243,6 +322,45 @@ fn parse_u32(key: &str, default: u32) -> Result<u32> {
             .map_err(|_| AgentError::Config(format!("{key} must be an integer"))),
         _ => Ok(default),
     }
+}
+
+fn parse_bool(key: &str, default: bool) -> Result<bool> {
+    match std::env::var(key) {
+        Ok(value) if !value.trim().is_empty() => match value.trim().to_ascii_lowercase().as_str() {
+            "1" | "true" | "yes" | "on" => Ok(true),
+            "0" | "false" | "no" | "off" => Ok(false),
+            _ => Err(AgentError::Config(format!("{key} must be true or false"))),
+        },
+        _ => Ok(default),
+    }
+}
+
+/// Admin-API:t är internt och talar klartext-HTTP på Docker-nätet. En
+/// operator som pekar om det (agenten körs utanför nätet) får använda
+/// https, men aldrig en path/query — URL:en byggs med `join`.
+fn parse_sftp_admin_url(raw: &str) -> Result<Url> {
+    let url = Url::parse(raw.trim())
+        .map_err(|err| AgentError::Config(format!("CRAFTPILOT_SFTP_ADMIN_URL: {err}")))?;
+
+    if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
+        return Err(AgentError::Config(
+            "CRAFTPILOT_SFTP_ADMIN_URL must be an http(s) origin".into(),
+        ));
+    }
+    if url.query().is_some() || url.fragment().is_some() {
+        return Err(AgentError::Config(
+            "CRAFTPILOT_SFTP_ADMIN_URL must not contain a query or fragment".into(),
+        ));
+    }
+    if !url.path().is_empty() && url.path() != "/" {
+        return Err(AgentError::Config(
+            "CRAFTPILOT_SFTP_ADMIN_URL must not contain a path".into(),
+        ));
+    }
+
+    let mut normalized = url.clone();
+    normalized.set_path("/");
+    Ok(normalized)
 }
 
 fn parse_u64(key: &str, default: u64) -> Result<u64> {

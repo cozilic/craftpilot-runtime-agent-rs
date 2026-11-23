@@ -118,6 +118,15 @@ impl Command {
     }
 }
 
+/// Det agenten frivilligt kan erbjuda noden just nu. `features` skickas med
+/// varje heartbeat/claim (även tom) så att mastern kan sluta visa en
+/// slutpunkt som inte längre fungerar. Värdnyckeln är publik information.
+#[derive(Debug, Clone, Default)]
+pub struct NodeCapabilities {
+    pub features: Vec<String>,
+    pub fingerprint: Option<String>,
+}
+
 #[derive(Debug, Serialize)]
 pub struct AckRequest {
     pub lease_token: String,
