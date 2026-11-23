@@ -38,6 +38,14 @@ const DOCKER_PULL_TIMEOUT: Duration = Duration::from_secs(300);
 const IMAGE_PULL_RETRY: Duration = Duration::from_secs(5 * 60);
 const SFTPGO_SFTP_PORT: u16 = 2022;
 const SFTPGO_ADMIN_PORT: u16 = 8080;
+/// SFTPGo får bara servera den här värdnyckeln. Panelen visar agentens
+/// rapporterade fingeravtryck, och en klient som annars förhandlat fram
+/// RSA/ECDSA hade då fått ett annat värde än panelen.
+const SFTPGO_HOST_KEY_PATH: &str = "/var/lib/sftpgo/id_ed25519";
+/// Höjs när containerns miljö/mounts ändras på ett sätt som kräver att en
+/// befintlig container återskapas. En uppgraderad agent ska inte behöva
+/// vänta på att någon tar bort containern manuellt.
+const CONTAINER_CONFIG_VERSION: &str = "2";
 
 pub struct SftpService {
     image: String,
@@ -193,7 +201,7 @@ impl SftpService {
             .docker(&[
                 "inspect",
                 "--format",
-                "{{.State.Running}}|{{.Config.Image}}|{{index .Config.Labels \"craftpilot.sftpgo\"}}|{{json .HostConfig.PortBindings}}",
+                "{{.State.Running}}|{{.Config.Image}}|{{index .Config.Labels \"craftpilot.sftpgo\"}}|{{index .Config.Labels \"craftpilot.sftpgo.config\"}}|{{json .HostConfig.PortBindings}}",
                 &self.container_name,
             ])
             .await;
@@ -221,8 +229,8 @@ impl SftpService {
         }
 
         let raw = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        let parts: Vec<&str> = raw.splitn(4, '|').collect();
-        if parts.len() != 4 {
+        let parts: Vec<&str> = raw.splitn(5, '|').collect();
+        if parts.len() != 5 {
             self.container_healthy = false;
             return Err(AgentError::Runtime(
                 "docker returned an invalid sftpgo container state".into(),
@@ -231,7 +239,8 @@ impl SftpService {
         let running = parts[0] == "true";
         let image = parts[1];
         let label = parts[2];
-        let ports = parts[3];
+        let config_version = parts[3];
+        let ports = parts[4];
 
         if label != "1" {
             self.container_healthy = false;
@@ -241,9 +250,10 @@ impl SftpService {
             )));
         }
 
-        // En uppgradering av agenten kan byta image eller port. Då återskapas
-        // containern; SFTPGo:s databas och hemm ligger kvar i volymerna.
-        if image != self.image || !self.publishes_expected_port(ports) {
+        // En uppgradering av agenten kan byta image, port eller miljö. Då
+        // återskapas containern; SFTPGo:s databas, hemm och värdnyckel ligger
+        // kvar i volymerna.
+        if !self.settings_match(image, config_version, ports) {
             info!(
                 image = %image,
                 "sftpgo container settings changed; recreating it"
@@ -303,6 +313,15 @@ impl SftpService {
     fn mark_healthy(&mut self) {
         self.container_healthy = true;
         self.container_checked_at = Some(Instant::now());
+    }
+
+    /// Image, konfigurationsversion och publicerad port måste stämma. Ett
+    /// inställningsbyte (t.ex. Ed25519-only-värdnyckeln) kräver en ny
+    /// container eftersom Docker inte ändrar miljön på en befintlig.
+    fn settings_match(&self, image: &str, config_version: &str, ports: &str) -> bool {
+        image == self.image
+            && config_version == CONTAINER_CONFIG_VERSION
+            && self.publishes_expected_port(ports)
     }
 
     fn publishes_expected_port(&self, raw: &str) -> bool {
@@ -369,6 +388,8 @@ impl SftpService {
             "craftpilot.managed=1".into(),
             "--label".into(),
             "craftpilot.sftpgo=1".into(),
+            "--label".into(),
+            format!("craftpilot.sftpgo.config={CONTAINER_CONFIG_VERSION}"),
             "--restart".into(),
             "unless-stopped".into(),
             "--network".into(),
@@ -424,6 +445,9 @@ impl SftpService {
                 "SFTPGO_SFTPD__BINDINGS__0__PORT",
                 SFTPGO_SFTP_PORT.to_string(),
             ),
+            // Bara Ed25519: panelens fingeravtryck ska vara det enda en
+            // klient kan få, oavsett vilken algoritm den föredrar.
+            ("SFTPGO_SFTPD__HOST_KEYS", SFTPGO_HOST_KEY_PATH.to_string()),
             // Skapade filer ska vara gruppskrivbara: spelcontainern och
             // SFTP delar ofta grupp men inte användare.
             ("SFTPGO_COMMON__UMASK", "0002".to_string()),
@@ -534,6 +558,11 @@ mod tests {
             joined.contains("SFTPGO_HTTPD__BINDINGS__0__ENABLE_WEB_ADMIN=false"),
             "{joined}"
         );
+        assert!(
+            joined.contains("SFTPGO_SFTPD__HOST_KEYS=/var/lib/sftpgo/id_ed25519"),
+            "{joined}"
+        );
+        assert!(joined.contains("craftpilot.sftpgo.config=2"), "{joined}");
         assert!(joined.ends_with(DEFAULT_SFTP_IMAGE), "{joined}");
     }
 
@@ -568,6 +597,20 @@ mod tests {
         service.unavailable();
         assert!(service.capabilities().features.is_empty());
         assert!(service.capabilities().fingerprint.is_none());
+    }
+
+    #[test]
+    fn a_changed_container_configuration_forces_a_recreate() {
+        let service = service();
+        let ports = r#"{"2022/tcp":[{"HostIp":"0.0.0.0","HostPort":"2222"}]}"#;
+
+        assert!(service.settings_match(DEFAULT_SFTP_IMAGE, "2", ports));
+        // En gammal container (utan config-label eller med en tidigare
+        // version) ska bytas ut så Ed25519-only slår igenom.
+        assert!(!service.settings_match(DEFAULT_SFTP_IMAGE, "<no value>", ports));
+        assert!(!service.settings_match(DEFAULT_SFTP_IMAGE, "1", ports));
+        assert!(!service.settings_match("drakkan/sftpgo:v2.6.5", "2", ports));
+        assert!(!service.settings_match(DEFAULT_SFTP_IMAGE, "2", "{}"));
     }
 
     #[test]
