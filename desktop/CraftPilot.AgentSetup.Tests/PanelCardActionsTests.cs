@@ -23,6 +23,21 @@ public sealed class PanelCardActionsTests
         Assert.Contains(endpoint, handler.Value);
     }
 
+    [Fact]
+    public void Sftp_buttons_require_a_running_agent()
+    {
+        var script = PanelFile("app.js");
+
+        // SFTPGo startas och stoppas av agenten, så knapparna får inte vara
+        // aktiva när agenten är stoppad — då skulle de starta den.
+        Assert.Contains(
+            "$('sftp-start').disabled = state.busy || !state.dockerReady || !agentRunning || sftpEnabled;",
+            script);
+        Assert.Contains(
+            "$('sftp-stop').disabled = state.busy || !state.dockerReady || !agentRunning || !sftpEnabled;",
+            script);
+    }
+
     [Theory]
     [InlineData("agent-start")]
     [InlineData("agent-stop")]

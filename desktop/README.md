@@ -71,6 +71,10 @@ stänger bara av agentcontainern; SFTPGo-containern och dess sessioner ligger kv
 och containern tas bort medan volymerna (och värdnyckeln) ligger kvar. **Starta** slår på
 flaggan igen och agenten startar SFTPGo på samma volymer och portval som tidigare.
 
+SFTPGo startas och stoppas av agenten, så SFTP-knapparna är låsta när agenten är stoppad —
+annars hade de startat agenten som en bieffekt av att man bara ville stänga av SFTP. Starta
+agenten först; flaggan kan ändå sättas i Inställningar och gäller nästa start.
+
 Under **Inställningar → SFTP på den här noden** slås nodens SFTP av och på. Panelen skriver
 `CRAFTPILOT_SFTP_ENABLED` i `.env.desktop` och återskapar agentcontainern; rader panelen inte
 äger, t.ex. `CRAFTPILOT_RS_AGENT_IMAGE_TAG`, lämnas orörda. Är flaggan av tar agenten bort

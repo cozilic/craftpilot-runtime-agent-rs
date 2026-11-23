@@ -93,6 +93,7 @@ window.CraftPilotI18n = (function () {
       'card.agentStopTitle': 'Stoppar agenten; SFTP-sessionerna på noden ligger kvar',
       'card.sftpStartTitle': 'Slår på SFTP och startar SFTPGo igen på samma volymer',
       'card.sftpStopTitle': 'Stänger av SFTP: sessioner kopplas ner och containern tas bort, volymerna ligger kvar',
+      'card.sftpNeedsAgent': 'Starta agenten först — SFTPGo startas och stoppas av agenten',
 
       'update.title': 'Ny panelversion finns',
       'update.confirm': 'Ladda ner ny panelversion nu? Panelen startar om när filen är utbytt.',
@@ -320,6 +321,7 @@ window.CraftPilotI18n = (function () {
       'card.agentStopTitle': 'Stops the agent; the SFTP sessions on the node stay up',
       'card.sftpStartTitle': 'Turns SFTP on and starts SFTPGo again on the same volumes',
       'card.sftpStopTitle': 'Turns SFTP off: sessions are disconnected and the container is removed, the volumes stay',
+      'card.sftpNeedsAgent': 'Start the agent first — SFTPGo is started and stopped by the agent',
 
       'update.title': 'A new panel version is available',
       'update.confirm': 'Download the new panel version now? The panel restarts once the file is replaced.',

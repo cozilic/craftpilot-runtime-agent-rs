@@ -406,9 +406,20 @@ function updateCardActions() {
   $('agent-stop').disabled = state.busy || !state.dockerReady || !installed || !agentRunning;
 
   // SFTP ägs av agenten: stopp = flaggan av (containern tas bort, volymerna
-  // ligger kvar), start = flaggan på igen. Samma väg som switchen.
-  $('sftp-start').disabled = state.busy || !state.dockerReady || sftpEnabled;
-  $('sftp-stop').disabled = state.busy || !state.dockerReady || !sftpEnabled;
+  // ligger kvar), start = flaggan på igen. Agenten måste läsa om flaggan, så
+  // knapparna kräver att den kör — annars skulle de starta en stoppad agent.
+  $('sftp-start').disabled = state.busy || !state.dockerReady || !agentRunning || sftpEnabled;
+  $('sftp-stop').disabled = state.busy || !state.dockerReady || !agentRunning || !sftpEnabled;
+
+  // Tooltipen säger varför knapparna är låsta. Datanyckeln uppdateras också, så
+  // ett språkbyte behåller rätt text.
+  for (const [id, key] of [
+    ['sftp-start', agentRunning ? 'card.sftpStartTitle' : 'card.sftpNeedsAgent'],
+    ['sftp-stop', agentRunning ? 'card.sftpStopTitle' : 'card.sftpNeedsAgent'],
+  ]) {
+    $(id).dataset.i18nTitle = key;
+    $(id).title = t(key);
+  }
 }
 
 function renderStatus(status) {
