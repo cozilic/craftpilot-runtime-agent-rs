@@ -394,6 +394,23 @@ function renderSftp(status) {
   }
 }
 
+// Starta/Stoppa på korten. Knappen som inte kan göra något ligger disabled i
+// stället för att försvinna, så korten inte hoppar mellan gångerna.
+function updateCardActions() {
+  const status = state.status ?? {};
+  const installed = Boolean(status.installed) || Boolean(state.agentExists);
+  const agentRunning = Boolean(status.agentRunning);
+  const sftpEnabled = status.sftp?.enabled !== false;
+
+  $('agent-start').disabled = state.busy || !state.dockerReady || !installed || agentRunning;
+  $('agent-stop').disabled = state.busy || !state.dockerReady || !installed || !agentRunning;
+
+  // SFTP ägs av agenten: stopp = flaggan av (containern tas bort, volymerna
+  // ligger kvar), start = flaggan på igen. Samma väg som switchen.
+  $('sftp-start').disabled = state.busy || !state.dockerReady || sftpEnabled;
+  $('sftp-stop').disabled = state.busy || !state.dockerReady || !sftpEnabled;
+}
+
 function renderStatus(status) {
   state.status = status;
   state.loaded = true;
@@ -486,6 +503,7 @@ function renderStatus(status) {
   }
 
   renderSftp(status);
+  updateCardActions();
 
   if (!state.dockerReady) {
     setCard(
@@ -595,6 +613,7 @@ function applyControls() {
   $('prune-servers').disabled = state.busy || !state.dockerReady;
   $('update-now').disabled = state.busy;
   $('sftp-enabled').disabled = state.busy;
+  updateCardActions();
 }
 
 const TAB_IDS = ['main', 'settings', 'log'];
@@ -1080,6 +1099,30 @@ $('sftp-enabled').addEventListener('change', async () => {
 
 $('update').addEventListener('click', () => {
   runOperation('/api/update', null, t('log.pullLabel'));
+});
+
+$('agent-start').addEventListener('click', () => {
+  runOperation('/api/start', null, t('log.startLabel'));
+});
+
+$('agent-stop').addEventListener('click', () => {
+  if (!window.confirm(t('log.stopConfirm'))) {
+    return;
+  }
+
+  runOperation('/api/stop', null, t('log.stopLabel'));
+});
+
+$('sftp-start').addEventListener('click', () => {
+  runOperation('/api/sftp', { enabled: true }, t('log.sftpOnLabel'));
+});
+
+$('sftp-stop').addEventListener('click', () => {
+  if (!window.confirm(t('settings.sftpConfirmOff'))) {
+    return;
+  }
+
+  runOperation('/api/sftp', { enabled: false }, t('log.sftpOffLabel'));
 });
 
 $('stop').addEventListener('click', () => {

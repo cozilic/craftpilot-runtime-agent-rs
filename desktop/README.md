@@ -65,6 +65,12 @@ Porten läses ur Docker, inte ur `.env.desktop`: agenten tar nästa lediga port 
 `CRAFTPILOT_SFTP_PORT` är upptagen, och då står den önskade porten som en rad under kortet.
 Samma uppgifter finns i diagnosfilen under `[SFTP]`.
 
+Korten **Agent** och **SFTP** har **Starta**/**Stoppa** direkt i översikten. Agentens **Stoppa**
+stänger bara av agentcontainern; SFTPGo-containern och dess sessioner ligger kvar. SFTP:s
+**Stoppa** är samma sak som switchen i Inställningar — flaggan skrivs av, sessioner kopplas ner
+och containern tas bort medan volymerna (och värdnyckeln) ligger kvar. **Starta** slår på
+flaggan igen och agenten startar SFTPGo på samma volymer och portval som tidigare.
+
 Under **Inställningar → SFTP på den här noden** slås nodens SFTP av och på. Panelen skriver
 `CRAFTPILOT_SFTP_ENABLED` i `.env.desktop` och återskapar agentcontainern; rader panelen inte
 äger, t.ex. `CRAFTPILOT_RS_AGENT_IMAGE_TAG`, lämnas orörda. Är flaggan av tar agenten bort

@@ -304,6 +304,10 @@ public sealed class AgentSetupService
     public Task<OperationResponse> RestartAgentAsync(CancellationToken ct = default) =>
         RunOperationAsync(RestartAgentCoreAsync, ct);
 
+    /// <summary>Startar en agent som redan är installerad; hämtar ingen ny image.</summary>
+    public Task<OperationResponse> StartAsync(CancellationToken ct = default) =>
+        RunOperationAsync(StartAgentCoreAsync, ct);
+
     /// <summary>Startar om en servercontainer som panelen själv har hittat via labeln.</summary>
     public Task<OperationResponse> RestartServerAsync(string serverId, CancellationToken ct = default) =>
         RunOperationAsync((output, token) => RestartServerCoreAsync(serverId, output, token), ct);
@@ -471,6 +475,32 @@ public sealed class AgentSetupService
             return Fail("Kunde inte hämta agentimagen.", output);
         }
 
+        if (await StartAgentAsync(output, ct) != 0)
+        {
+            return Fail("Kunde inte starta agenten.", output);
+        }
+
+        await Task.Delay(TimeSpan.FromSeconds(2.5), ct);
+        return new OperationResponse(true, output.ToString().Trim(), null, await GetStatusAsync(ct));
+    }
+
+    private async Task<OperationResponse> StartAgentCoreAsync(
+        StringBuilder output,
+        CancellationToken ct)
+    {
+        if (!File.Exists(ComposePath) || !File.Exists(EnvPath))
+        {
+            return Fail("Agenten är inte installerad ännu.", output);
+        }
+
+        var docker = await CheckDockerAsync(ct);
+        if (docker.State != DockerStateClassifier.Ready)
+        {
+            return Fail(DockerGuidance(docker.State), output);
+        }
+
+        // Samma väg som installationen: en kvarvarande container med samma
+        // namn tas bort först, sedan `compose up -d` med befintlig .env.
         if (await StartAgentAsync(output, ct) != 0)
         {
             return Fail("Kunde inte starta agenten.", output);
