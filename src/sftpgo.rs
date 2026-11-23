@@ -17,6 +17,7 @@ use std::time::{Duration, Instant};
 use reqwest::{Client, Method, StatusCode};
 use serde::Deserialize;
 use serde_json::{json, Value};
+use tracing::warn;
 use url::Url;
 
 use crate::error::{AgentError, Result};
@@ -28,6 +29,10 @@ pub const CONTAINER_SERVERS_ROOT: &str = "/srv/craftpilot/servers";
 /// Admin-token lever i 15 minuter som default; förnya i god tid.
 const TOKEN_TTL: Duration = Duration::from_secs(10 * 60);
 const MAX_SUMMARY: usize = 200;
+/// Fallback bara när varken ett override eller katalogens ägare kan läsas
+/// (t.ex. en utvecklingsnod utan unix-ägare).
+const DEFAULT_FILE_UID: u32 = 33;
+const DEFAULT_FILE_GID: u32 = 33;
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 pub struct SftpFolder {
@@ -57,8 +62,9 @@ pub struct SftpState {
 /// kan peka på en temporär data-rot.
 pub struct ApplyConfig<'a> {
     pub data_root: &'a Path,
-    pub file_uid: u32,
-    pub file_gid: u32,
+    /// `None` = använd serverkatalogens ägare.
+    pub file_uid: Option<u32>,
+    pub file_gid: Option<u32>,
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -121,9 +127,9 @@ impl SftpGoClient {
                 continue;
             }
             for folder in &user.folders {
-                match desired_folder(folder, cfg.data_root) {
-                    Some((name, mapped)) => {
-                        folders.insert(name, mapped);
+                match server_mount(folder, cfg.data_root) {
+                    Some(mount) => {
+                        folders.insert(mount.name, mount.mapped);
                     }
                     None => skipped_folders += 1,
                 }
@@ -151,18 +157,38 @@ impl SftpGoClient {
             }
 
             let mut pairs: Vec<(String, String)> = Vec::new();
+            let mut derived_owner: Option<(u32, u32)> = None;
+            let mut differing_owners = 0usize;
             for folder in &user.folders {
-                if let Some((name, mapped)) = desired_folder(folder, cfg.data_root) {
-                    pairs.push((name, mapped));
+                let Some(mount) = server_mount(folder, cfg.data_root) else {
+                    continue;
+                };
+                if let Some(owner) = directory_owner(&mount.resolved) {
+                    match derived_owner {
+                        None => derived_owner = Some(owner),
+                        Some(first) if first != owner => differing_owners += 1,
+                        _ => {}
+                    }
                 }
+                pairs.push((mount.name, mount.mapped));
             }
+            if differing_owners > 0 {
+                // SFTPGo har en uid/gid per konto, inte per mapp. Den första
+                // serverns ägare används (deterministiskt), och antalet
+                // avvikande servrar loggas så en blandad nod syns.
+                warn!(
+                    servers = differing_owners + 1,
+                    "sftp servers have different owners; using the first one"
+                );
+            }
+            let (file_uid, file_gid) = effective_owner(cfg.file_uid, cfg.file_gid, derived_owner);
 
             let Some(payload) = desired_user(
                 &user.username,
                 &user.public_keys,
                 &pairs,
-                cfg.file_uid,
-                cfg.file_gid,
+                file_uid,
+                file_gid,
             ) else {
                 // Inga giltiga nycklar (eller inga mappar): inget konto.
                 // Ett befintligt konto tas bort i städningen nedan.
@@ -552,17 +578,58 @@ fn user_matches(existing: &Value, desired: &Value) -> bool {
         && folders(existing) == folders(desired)
 }
 
+/// En servermapp som får mountas: namnet mastern använder, sökvägen i
+/// containern och den resolverade katalogen på noden (för ägaruppslag).
+struct ServerMount {
+    name: String,
+    mapped: String,
+    resolved: PathBuf,
+}
+
 /// Sökvägen SFTPGo ska mounta för en server, om katalogen finns och ligger
 /// under data-roten. Symlänkar och escape-vägar avvisas (AGENTS §6).
-pub fn desired_folder(folder: &SftpFolder, data_root: &Path) -> Option<(String, String)> {
+fn server_mount(folder: &SftpFolder, data_root: &Path) -> Option<ServerMount> {
     if !valid_slug(&folder.name) {
         return None;
     }
-    resolve_server_dir(data_root, &folder.server_id)?;
-    Some((
-        folder.name.clone(),
-        format!("{CONTAINER_SERVERS_ROOT}/{}", folder.server_id),
-    ))
+    let resolved = resolve_server_dir(data_root, &folder.server_id)?;
+    Some(ServerMount {
+        name: folder.name.clone(),
+        mapped: format!("{CONTAINER_SERVERS_ROOT}/{}", folder.server_id),
+        resolved,
+    })
+}
+
+/// Serverkatalogens ägare. SFTPGo ska skapa filer med samma uid/gid som
+/// katalogen, annars kan spelets container inte skriva dem när noden kör en
+/// annan användare än panelens images.
+#[cfg(unix)]
+fn directory_owner(path: &Path) -> Option<(u32, u32)> {
+    use std::os::unix::fs::MetadataExt;
+    let metadata = std::fs::metadata(path).ok()?;
+    Some((metadata.uid(), metadata.gid()))
+}
+
+#[cfg(not(unix))]
+fn directory_owner(_path: &Path) -> Option<(u32, u32)> {
+    None
+}
+
+/// Ett explicit override vinner över katalogens ägare; utan båda används
+/// panelens tidigare default (33).
+fn effective_owner(
+    uid_override: Option<u32>,
+    gid_override: Option<u32>,
+    derived: Option<(u32, u32)>,
+) -> (u32, u32) {
+    (
+        uid_override
+            .or_else(|| derived.map(|(uid, _)| uid))
+            .unwrap_or(DEFAULT_FILE_UID),
+        gid_override
+            .or_else(|| derived.map(|(_, gid)| gid))
+            .unwrap_or(DEFAULT_FILE_GID),
+    )
 }
 
 /// Resolverar `<data root>/<server uuid>` och kräver att den verkliga
@@ -811,7 +878,61 @@ mod tests {
             server_id: SERVER_ID.into(),
         };
 
-        assert!(desired_folder(&folder, &root).is_none());
+        assert!(server_mount(&folder, &root).is_none());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn the_server_directory_owner_is_used_unless_overridden() {
+        assert_eq!(
+            effective_owner(None, None, Some((1000, 1001))),
+            (1000, 1001)
+        );
+        assert_eq!(
+            effective_owner(Some(2000), None, Some((1000, 1001))),
+            (2000, 1001)
+        );
+        assert_eq!(
+            effective_owner(None, Some(2001), Some((1000, 1001))),
+            (1000, 2001)
+        );
+        assert_eq!(
+            effective_owner(None, None, None),
+            (DEFAULT_FILE_UID, DEFAULT_FILE_GID)
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn apply_creates_files_with_the_server_directory_owner() {
+        let root = temp_dir("owner");
+        let server_dir = root.join(SERVER_ID);
+        std::fs::create_dir_all(&server_dir).unwrap();
+        // CI och agentcontainern kör som root; ett vanligt konto kan inte byta
+        // ägare på en katalog, och då hoppar vi över i stället för att falla.
+        if std::os::unix::fs::chown(&server_dir, Some(1000), Some(1001)).is_err() {
+            std::fs::remove_dir_all(&root).unwrap();
+            return;
+        }
+        assert_eq!(directory_owner(&server_dir), Some((1000, 1001)));
+
+        let server = MockSftpGo::start().await;
+        let mut client = server.client().await;
+        client
+            .apply(
+                &state(vec![user("u42", true, true)]),
+                &ApplyConfig {
+                    data_root: &root,
+                    file_uid: None,
+                    file_gid: None,
+                },
+            )
+            .await
+            .unwrap();
+        let stored = server.user("u42").unwrap();
+        assert_eq!(stored["uid"], 1000);
+        assert_eq!(stored["gid"], 1001);
+
         std::fs::remove_dir_all(&root).unwrap();
     }
 
@@ -828,8 +949,8 @@ mod tests {
                 &state,
                 &ApplyConfig {
                     data_root: &root,
-                    file_uid: 33,
-                    file_gid: 33,
+                    file_uid: None,
+                    file_gid: None,
                 },
             )
             .await
@@ -870,8 +991,8 @@ mod tests {
                 &state,
                 &ApplyConfig {
                     data_root: &root,
-                    file_uid: 33,
-                    file_gid: 33,
+                    file_uid: None,
+                    file_gid: None,
                 },
             )
             .await
@@ -907,8 +1028,8 @@ mod tests {
                 &state,
                 &ApplyConfig {
                     data_root: &root,
-                    file_uid: 33,
-                    file_gid: 33,
+                    file_uid: None,
+                    file_gid: None,
                 },
             )
             .await
@@ -943,8 +1064,8 @@ mod tests {
                 &state(vec![user("u42", false, true)]),
                 &ApplyConfig {
                     data_root: &root,
-                    file_uid: 33,
-                    file_gid: 33,
+                    file_uid: None,
+                    file_gid: None,
                 },
             )
             .await
@@ -971,8 +1092,8 @@ mod tests {
                 &state(vec![user("u42", true, true)]),
                 &ApplyConfig {
                     data_root: &root,
-                    file_uid: 33,
-                    file_gid: 33,
+                    file_uid: None,
+                    file_gid: None,
                 },
             )
             .await

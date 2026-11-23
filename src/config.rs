@@ -65,10 +65,11 @@ pub struct SftpSettings {
     /// SFTPGo:s admin-API. Ligger på Docker-nätet och publiceras aldrig.
     pub admin_url: Url,
     pub container_name: String,
-    /// Filer SFTPGo skapar tilldelas den här uid/gid. Samma som
-    /// spelcontainrarna i panelens images (CRAFTPILOT_DATA_GID).
-    pub file_uid: u32,
-    pub file_gid: u32,
+    /// Explicita ägare för filer SFTPGo skapar. `None` (default) läser
+    /// serverkatalogens ägare, så filerna kan skrivas av spelets container
+    /// även när noden kör en annan uid/gid än panelens images.
+    pub file_uid: Option<u32>,
+    pub file_gid: Option<u32>,
     pub admin_username: String,
 }
 
@@ -108,8 +109,8 @@ impl Config {
                 port: 2222,
                 admin_url: Url::parse("http://craftpilot-sftpgo:8080/").unwrap(),
                 container_name: DEFAULT_SFTP_CONTAINER.to_string(),
-                file_uid: 33,
-                file_gid: 33,
+                file_uid: None,
+                file_gid: None,
                 admin_username: DEFAULT_SFTP_ADMIN_USERNAME.to_string(),
             },
         }
@@ -176,8 +177,9 @@ impl Config {
             "http://craftpilot-sftpgo:8080/",
         ))?;
         let data_gid = parse_u32("CRAFTPILOT_DATA_GID", 33)?;
-        let sftp_file_gid = parse_u32("CRAFTPILOT_SFTP_FILE_GID", data_gid)?;
-        let sftp_file_uid = parse_u32("CRAFTPILOT_SFTP_FILE_UID", 33)?;
+        // Tomt/utelämnat = härleds per användare ur serverkatalogens ägare.
+        let sftp_file_gid = optional_u32("CRAFTPILOT_SFTP_FILE_GID")?;
+        let sftp_file_uid = optional_u32("CRAFTPILOT_SFTP_FILE_UID")?;
 
         Ok(Self {
             master_url,
@@ -361,6 +363,17 @@ fn parse_sftp_admin_url(raw: &str) -> Result<Url> {
     let mut normalized = url.clone();
     normalized.set_path("/");
     Ok(normalized)
+}
+
+fn optional_u32(key: &str) -> Result<Option<u32>> {
+    match std::env::var(key) {
+        Ok(value) if !value.trim().is_empty() => value
+            .trim()
+            .parse::<u32>()
+            .map(Some)
+            .map_err(|_| AgentError::Config(format!("{key} must be an integer"))),
+        _ => Ok(None),
+    }
 }
 
 fn parse_u64(key: &str, default: u64) -> Result<u64> {
