@@ -114,6 +114,12 @@ Bocken **Starta med Windows** lägger en post under
 inloggning. Då visas bara tray-ikonen; panelens fönster skapas först när du öppnar det. Samma
 inställning finns i tray-menyn.
 
+Vid panelstart väntar panelen in Docker i upp till två minuter. Saknas agentcontainern startar
+panelen compose-projektet själv; en container som finns men är stoppad rörs inte. Har du tryckt
+**Stoppa** i panelen kommer agenten inte tillbaka förrän du trycker **Starta** — stoppet sparas i
+panelens inställningsfil. Kommer agenten inte upp inom tre minuter från startförsöket visar trayen
+en notis i stället för att noden tystnar.
+
 **Avbryt** avbryter en pågående åtgärd (installation, uppdatering, stopp eller borttagning).
 **Uppdatera** hämtar den image som compose-filen pekar på (`:0.12`) och startar om agenten. **Stoppa** stoppar
 containern men behåller både serverdata och agentens state. **Ta bort** tar bort containern och
