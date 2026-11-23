@@ -166,8 +166,11 @@ Compose-filen som används är repots `compose.desktop.yaml`, inbäddad i EXE-fi
 ## Säkerhet
 
 Panelens HTTP-server lyssnar bara på `127.0.0.1` och kräver en slumpad token som genereras vid
-varje start. Fönstret får bara navigera till panelens egen loopback-adress; externa länkar öppnas
-i standardwebbläsaren. Panelen har ingen inloggning och ska bara köras på din egen dator. Agenten
+varje start. Varje anrop måste dessutom ha rätt `Host` (`127.0.0.1:<port>` eller `localhost:<port>`),
+så en domän som pekar om till loopback via DNS-rebinding avvisas – även sidan som bär tokenen. POST,
+PUT, PATCH och DELETE från en annan origin, eller med `Sec-Fetch-Site: cross-site`/`same-site`,
+får `403 forbidden`; anrop utan webbläsarhuvuden (curl, skript) måste ändå ha tokenen. Fönstret får
+bara navigera till panelens egen loopback-adress; externa länkar öppnas i standardwebbläsaren. Panelen har ingen inloggning och ska bara köras på din egen dator. Agenten
 får åtkomst till Docker-socketen, vilket i praktiken är root på värden – behandla den som en
 privilegierad tjänst.
 
