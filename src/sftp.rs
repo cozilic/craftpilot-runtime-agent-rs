@@ -55,8 +55,9 @@ pub struct SftpService {
     server_data_root: PathBuf,
     /// Värdvägen Docker daemon ser för serverdatan.
     host_data_root: PathBuf,
-    file_uid: u32,
-    file_gid: u32,
+    /// `None` = härled ur serverkatalogens ägare vid varje apply.
+    file_uid: Option<u32>,
+    file_gid: Option<u32>,
     config_volume: String,
     data_volume: String,
     admin_username: String,
@@ -396,7 +397,8 @@ impl SftpService {
             self.network.clone(),
             // SFTPGo:s image kör uid 1000 som default. Nodens serverfiler
             // ägs av spelcontainrarnas användare, så SFTPGo måste kunna
-            // skriva dem; skapade filer får uid/gid från användarobjektet.
+            // skriva dem; skapade filer får uid/gid från användarobjektet
+            // (härlett ur serverkatalogen om inget override är satt).
             "--user".into(),
             "0:0".into(),
             "--volume".into(),
@@ -518,8 +520,8 @@ mod tests {
             port: 2222,
             admin_url: Url::parse("http://craftpilot-sftpgo:8080/").unwrap(),
             container_name: "craftpilot-sftpgo".to_string(),
-            file_uid: 33,
-            file_gid: 33,
+            file_uid: None,
+            file_gid: None,
             admin_username: "craftpilot-agent".to_string(),
         };
         SftpService::new(&cfg, "test-admin-password".to_string()).unwrap()

@@ -174,8 +174,8 @@ A download larger than `CRAFTPILOT_MAX_UPLOAD_BYTES` is refused before anything 
 | `CRAFTPILOT_SFTP_PORT` | `2222` | Host port published for SFTP (the container port is always 2022). The admin API is never published. |
 | `CRAFTPILOT_SFTP_ADMIN_URL` | `http://craftpilot-sftpgo:8080/` | Internal admin API origin. Must be reachable from the agent; the Docker network name is used by default. |
 | `CRAFTPILOT_SFTP_CONTAINER` | `craftpilot-sftpgo` | Container name. Config and home/data live in the volumes `<name>-config` and `<name>-data`. |
-| `CRAFTPILOT_SFTP_FILE_UID` | `33` | Owner of files SFTPGo creates. Match the runtime user of the game containers. |
-| `CRAFTPILOT_SFTP_FILE_GID` | `CRAFTPILOT_DATA_GID` (33) | Group of files SFTPGo creates. |
+| `CRAFTPILOT_SFTP_FILE_UID` | owner of `<data root>/<server uuid>` | Owner of files SFTPGo creates. Derived from the server directory so the game container can write them on any node; set it only to override a node with unusual ownership. |
+| `CRAFTPILOT_SFTP_FILE_GID` | owner of `<data root>/<server uuid>` | Group of files SFTPGo creates (same derivation and override). Fallback is `33` when no unix owner can be read. |
 | `RUST_LOG` | `info` | Log filter. Console text, credentials and RCON passwords are never logged. |
 
 There is no built-in master default: a bare `docker run` without
@@ -211,6 +211,12 @@ SFTPGo is started with
 `SFTPGO_SFTPD__HOST_KEYS=/var/lib/sftpgo/id_ed25519`, so RSA/ECDSA host keys are neither
 served nor reported. A container created by an older agent is recreated automatically (the
 `craftpilot.sftpgo.config` label), while the volumes and the Ed25519 key are kept.
+
+New files get the uid/gid of the server directory they are created in, read from the mounted data
+root, so an SFTP upload stays writable by the game container even when the node's runtime user
+differs from the panel images. `CRAFTPILOT_SFTP_FILE_UID`/`_GID` override the derivation. SFTPGo
+has one uid/gid per account, so when a user's servers have different owners the first server's
+owner is used and the node logs how many servers differ.
 
 Accounts are key-only: the master's password channel is disabled and not implemented here, so
 a user without a public key gets no account (never an account without an authentication
