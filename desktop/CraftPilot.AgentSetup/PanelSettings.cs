@@ -51,6 +51,12 @@ public sealed class PanelSettingsStore
         string? LatestVersion,
         string? ReleaseUrl)
     {
+        /// <summary>
+        /// Användaren stoppade agenten i panelen; uppstartsvakten ska inte
+        /// starta den igen. Saknas fältet i filen är svaret nej.
+        /// </summary>
+        public bool AgentStoppedByUser { get; init; }
+
         public static Snapshot Default { get; } =
             new(UpdateCheckIntervals.Daily, null, null, null);
     }
@@ -96,6 +102,20 @@ public sealed class PanelSettingsStore
             {
                 UpdateCheckInterval = UpdateCheckIntervals.Normalize(interval),
             };
+            Write(snapshot);
+            return snapshot;
+        }
+    }
+
+    /// <summary>
+    /// Kom ihåg att agenten stoppats med flit, så uppstartsvakten inte startar
+    /// den igen nästa gång panelen startar. Ett vanligt Starta nollställer.
+    /// </summary>
+    public Snapshot SaveAgentStoppedByUser(bool stopped)
+    {
+        lock (_gate)
+        {
+            var snapshot = Read() with { AgentStoppedByUser = stopped };
             Write(snapshot);
             return snapshot;
         }

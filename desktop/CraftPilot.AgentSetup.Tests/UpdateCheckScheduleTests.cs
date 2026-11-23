@@ -78,6 +78,28 @@ public sealed class UpdateCheckScheduleTests
     }
 
     [Fact]
+    public void Agent_stopped_by_user_survives_a_restart_and_can_be_cleared()
+    {
+        var path = TempPath();
+        try
+        {
+            var store = new PanelSettingsStore(path);
+            Assert.False(store.Load().AgentStoppedByUser);
+
+            store.SaveAgentStoppedByUser(true);
+            Assert.True(new PanelSettingsStore(path).Load().AgentStoppedByUser);
+
+            // Ett Starta nollställer markeringen, så nästa stopp kräver ett nytt val.
+            store.SaveAgentStoppedByUser(false);
+            Assert.False(new PanelSettingsStore(path).Load().AgentStoppedByUser);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
     public void Store_faller_tillbaka_pa_standard_nar_filen_ar_trasig()
     {
         var path = TempPath();
@@ -88,6 +110,7 @@ public sealed class UpdateCheckScheduleTests
 
             Assert.Equal(UpdateCheckIntervals.Daily, settings.UpdateCheckInterval);
             Assert.Null(settings.LastCheckedAt);
+            Assert.False(settings.AgentStoppedByUser);
         }
         finally
         {

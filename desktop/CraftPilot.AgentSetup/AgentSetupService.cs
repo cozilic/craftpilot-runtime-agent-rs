@@ -25,7 +25,19 @@ public sealed class AgentSetupService
     // namnet får inte försvinna ur panelen när agenten loggat vidare.
     private string? _nodeName;
 
-    public AgentSetupService(SetupSession session) => _session = session;
+    private readonly PanelSettingsStore _settings;
+
+    public AgentSetupService(SetupSession session, PanelSettingsStore settings)
+    {
+        _session = session;
+        _settings = settings;
+    }
+
+    /// <summary>
+    /// Sant när användaren stoppade agenten i panelen. Uppstartsvakten startar
+    /// då inte containern bakom ryggen; ett Starta nollställer markeringen.
+    /// </summary>
+    public bool AgentStoppedByUser => _settings.Load().AgentStoppedByUser;
 
     public string InstallDirectory => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
@@ -489,6 +501,7 @@ public sealed class AgentSetupService
             return Fail("Kunde inte starta agenten.", output);
         }
 
+        _settings.SaveAgentStoppedByUser(false);
         await Task.Delay(TimeSpan.FromSeconds(2.5), ct);
         return new OperationResponse(true, output.ToString().Trim(), null, await GetStatusAsync(ct));
     }
@@ -529,6 +542,7 @@ public sealed class AgentSetupService
             return Fail("Kunde inte starta agenten.", output);
         }
 
+        _settings.SaveAgentStoppedByUser(false);
         await Task.Delay(TimeSpan.FromSeconds(2.5), ct);
         return new OperationResponse(true, output.ToString().Trim(), null, await GetStatusAsync(ct));
     }
@@ -568,6 +582,7 @@ public sealed class AgentSetupService
             return Fail("Kunde inte starta om agenten.", output);
         }
 
+        _settings.SaveAgentStoppedByUser(false);
         await Task.Delay(TimeSpan.FromSeconds(1.5), ct);
         return new OperationResponse(true, output.ToString().Trim(), null, await GetStatusAsync(ct));
     }
@@ -787,6 +802,7 @@ public sealed class AgentSetupService
             return Fail("Kunde inte ta bort agentcontainern.", output);
         }
 
+        _settings.SaveAgentStoppedByUser(true);
         return new OperationResponse(true, output.ToString().Trim(), null, await GetStatusAsync(ct));
     }
 
@@ -825,6 +841,7 @@ public sealed class AgentSetupService
         }
 
         output.AppendLine("Agenten är borttagen från datorn. Serverdata ligger kvar, liksom agentens state-volym.");
+        _settings.SaveAgentStoppedByUser(false);
         return new OperationResponse(true, output.ToString().Trim(), null, await GetStatusAsync(ct));
     }
 

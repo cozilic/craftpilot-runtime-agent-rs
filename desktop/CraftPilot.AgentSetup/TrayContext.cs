@@ -100,6 +100,7 @@ public sealed class TrayContext : ApplicationContext
 
         _lifetime.ApplicationStopping.Register(OnApplicationStopping);
         _ = PollAsync();
+        _ = EnsureAgentStartedAsync();
 
         if (showPanel)
         {
@@ -203,6 +204,52 @@ public sealed class TrayContext : ApplicationContext
         finally
         {
             _polling = false;
+        }
+    }
+
+    /// <summary>
+    /// Vid panelstart: vänta in Docker, starta agentcontainern om den saknas
+    /// och larma om den inte kommer upp. En container som finns men är stoppad
+    /// rörs inte — den har någon stoppat med flit.
+    /// </summary>
+    private async Task EnsureAgentStartedAsync()
+    {
+        try
+        {
+            var watchdog = new StartupAgentWatchdog(
+                _service.GetStatusAsync,
+                _service.StartAsync,
+                stoppedByUser: () => _service.AgentStoppedByUser);
+            var result = await watchdog.RunAsync(_lifetime.ApplicationStopping);
+            var notice = StartupAgentNoticeFactory.For(result);
+            if (notice is null)
+            {
+                return;
+            }
+
+            Post(() =>
+            {
+                if (!_exiting)
+                {
+                    _notifyIcon.ShowBalloonTip(
+                        8000,
+                        notice.Title,
+                        notice.Message,
+                        notice.Error ? ToolTipIcon.Error : ToolTipIcon.Info);
+                }
+            });
+
+            // Statusen ritas om direkt så ikonen och panelen visar den startade
+            // agenten utan att vänta på nästa poll.
+            await PollAsync();
+        }
+        catch (OperationCanceledException)
+        {
+            // Panelen stängs; vakten behövs inte längre.
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"Uppstartsvakten kunde inte köra: {ex.Message}");
         }
     }
 
