@@ -163,6 +163,12 @@
               <span class="badge badge-idle" id="agent-badge" data-i18n="common.checking">Kontrollerar</span>
             </div>
             <p class="card-value" id="agent-value" data-i18n="common.checkingEllipsis">Kontrollerar…</p>
+            <div class="card-actions">
+              <button class="button button-quiet" id="agent-start" type="button"
+                      data-i18n="action.start" data-i18n-title="card.agentStartTitle">Starta</button>
+              <button class="button button-quiet button-danger" id="agent-stop" type="button"
+                      data-i18n="action.stop" data-i18n-title="card.agentStopTitle">Stoppa</button>
+            </div>
           </article>
 
           <article class="status-card" id="sftp-card">
@@ -173,6 +179,12 @@
             </div>
             <p class="card-value" id="sftp-value" data-i18n="common.checkingEllipsis">Kontrollerar…</p>
             <p class="stat-hint" id="sftp-hint"></p>
+            <div class="card-actions">
+              <button class="button button-quiet" id="sftp-start" type="button"
+                      data-i18n="action.start" data-i18n-title="card.sftpStartTitle">Starta</button>
+              <button class="button button-quiet button-danger" id="sftp-stop" type="button"
+                      data-i18n="action.stop" data-i18n-title="card.sftpStopTitle">Stoppa</button>
+            </div>
           </article>
 
           <article class="status-card status-card-claim" id="claim-card">

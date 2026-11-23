@@ -109,6 +109,10 @@ app.MapPost("/api/settings", (SettingsRequest request, PanelSettingsStore store)
 app.MapPost("/api/update", async (AgentSetupService service, CancellationToken ct) =>
     Results.Ok(await service.UpdateAsync(ct)));
 
+// Startar en redan installerad agent utan att hämta någon ny image.
+app.MapPost("/api/start", async (AgentSetupService service, CancellationToken ct) =>
+    Results.Ok(await service.StartAsync(ct)));
+
 // Slår SFTP på eller av för noden: flaggan skrivs i .env.desktop och agenten
 // återskapas, varpå den startar eller tar bort SFTPGo-containern.
 app.MapPost("/api/sftp", async (SftpRequest request, AgentSetupService service, CancellationToken ct) =>

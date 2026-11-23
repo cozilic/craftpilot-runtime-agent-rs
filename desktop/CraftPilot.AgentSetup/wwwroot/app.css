@@ -450,6 +450,19 @@ h1 span {
   overflow-wrap: anywhere;
 }
 
+.card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.card-actions .button {
+  min-height: 32px;
+  padding: 6px 12px;
+  font-size: 12px;
+}
+
 .card-link {
   display: inline-block;
   margin-top: 12px;
