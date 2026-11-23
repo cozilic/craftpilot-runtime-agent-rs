@@ -42,14 +42,31 @@ var indexHtml = ReadResource("wwwroot.index.html")
 
 app.Use(async (context, next) =>
 {
-    if (context.Request.Path.StartsWithSegments("/api") &&
-        !string.Equals(
-            context.Request.Headers["X-CraftPilot-Token"].ToString(),
-            session.Token,
-            StringComparison.Ordinal))
+    // Loopback räcker inte: en webbsida på en annan origin kan posta hit, och
+    // DNS-rebinding kan få en angripares domän att peka på 127.0.0.1. Vakten
+    // kräver rätt Host, sessionsnyckeln på /api och att tillståndsändrande
+    // anrop kommer från panelens egen origin.
+    var verdict = PanelRequestGuard.Evaluate(
+        new PanelRequestGuard.Request(
+            context.Request.Method,
+            context.Request.Path.Value ?? "/",
+            context.Request.Host.Value,
+            context.Connection.LocalPort,
+            context.Request.Headers["Origin"].ToString(),
+            context.Request.Headers["Sec-Fetch-Site"].ToString(),
+            context.Request.Headers["X-CraftPilot-Token"].ToString()),
+        session.Token);
+
+    if (verdict != PanelRequestGuard.Verdict.Allow)
     {
-        context.Response.StatusCode = StatusCodes.Status401Unauthorized;
-        await context.Response.WriteAsJsonAsync(new { error = "unauthorized" });
+        var unauthorized = verdict == PanelRequestGuard.Verdict.Unauthorized;
+        context.Response.StatusCode = unauthorized
+            ? StatusCodes.Status401Unauthorized
+            : StatusCodes.Status403Forbidden;
+        await context.Response.WriteAsJsonAsync(new
+        {
+            error = unauthorized ? "unauthorized" : "forbidden",
+        });
         return;
     }
 
