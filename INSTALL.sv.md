@@ -81,8 +81,8 @@ På Windows visar panelen Docker-, master- och agentstatus samt claim-koden.
 
 ## Uppdatera agenten
 
-`compose.yaml` och `compose.desktop.yaml` pekar på den stabila taggen `0.11`, så noden följer
-0.11.x-släppen i stället för varje push till `main`. `scripts/check-version.sh` (som CI kör) fäller
+`compose.yaml` och `compose.desktop.yaml` pekar på den stabila taggen `0.12`, så noden följer
+0.12.x-släppen i stället för varje push till `main`. `scripts/check-version.sh` (som CI kör) fäller
 en ändring där Cargo, panelen, compose-filerna och dokumentationen pekar på olika versioner. Serverdata och state-volymen ligger kvar
 vid uppdatering.
 
@@ -94,7 +94,7 @@ sudo docker compose pull && sudo docker compose up -d
 ```
 
 En befintlig installation behåller sin compose-fil – `setup.sh` skriver inte över den – så byt
-`:main` mot `:0.11` där en gång innan du hämtar imagen.
+`:main` mot `:0.12` där en gång innan du hämtar imagen.
 
 Att köra `sudo ./setup.sh` igen gör samma sak.
 
@@ -102,8 +102,8 @@ Att köra `sudo ./setup.sh` igen gör samma sak.
 Panelen uppdateras separat genom att ladda ner `CraftPilot.AgentSetup.exe` från senaste release
 (bannern i panelen länkar dit).
 
-Ny minor-version (t.ex. 0.11): sätt `CRAFTPILOT_RS_AGENT_IMAGE_TAG=0.11` i `.env` respektive
-`.env.desktop` (compose-filerna har `0.11` som default) och upprepa. Panelen behöver inte byggas om.
+Ny minor-version (t.ex. 0.12): sätt `CRAFTPILOT_RS_AGENT_IMAGE_TAG=0.12` i `.env` respektive
+`.env.desktop` (compose-filerna har `0.12` som default) och upprepa. Panelen behöver inte byggas om.
 
 ## Verifiera nedladdningar
 
