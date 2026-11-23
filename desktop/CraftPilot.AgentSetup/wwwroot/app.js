@@ -343,6 +343,49 @@ function setDockerNotice(status, dockerState) {
   cardLink.hidden = !notInstalled || desktopPresent;
 }
 
+// SFTPGo-porten agenten valde. Panelen frågar Docker i stället för att gissa
+// ur .env.desktop, så en port som flyttats från 2222 syns direkt.
+function renderSftp(status) {
+  const sftp = status.sftp ?? {};
+  const bound = sftp.boundPort;
+  const preferred = sftp.preferredPort;
+  const hint = $('sftp-hint');
+  hint.textContent = '';
+
+  if (!state.dockerReady) {
+    setCard(
+      'sftp-card', 'sftp-dot', 'sftp-badge', 'sftp-value',
+      'idle', t('common.waiting'), t('sftp.dockerDown')
+    );
+    return;
+  }
+
+  if (!sftp.running || bound == null) {
+    setCard(
+      'sftp-card', 'sftp-dot', 'sftp-badge', 'sftp-value',
+      'idle', t('sftp.notRunning'), t('sftp.notStarted')
+    );
+    return;
+  }
+
+  if (preferred != null && preferred !== bound) {
+    hint.textContent = t('sftp.wanted', { port: preferred });
+  }
+
+  if (sftp.responding === true) {
+    setCard(
+      'sftp-card', 'sftp-dot', 'sftp-badge', 'sftp-value',
+      'ok', t('sftp.answering'), t('sftp.port', { port: bound })
+    );
+  } else {
+    setCard(
+      'sftp-card', 'sftp-dot', 'sftp-badge', 'sftp-value',
+      'warn', t('sftp.noAnswer'), t('sftp.port', { port: bound }),
+      t('sftp.probeFailed')
+    );
+  }
+}
+
 function renderStatus(status) {
   state.status = status;
   state.loaded = true;
@@ -433,6 +476,8 @@ function renderStatus(status) {
       t('common.notInstalled')
     );
   }
+
+  renderSftp(status);
 
   if (!state.dockerReady) {
     setCard(

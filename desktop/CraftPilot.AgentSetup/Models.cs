@@ -41,6 +41,9 @@ public sealed class StatusResponse
     /// Servercontainrar som agenten kör på den här datorn, plus servrar som
     /// finns i serverdata-mappen men ännu inte startats.
     public IReadOnlyList<ServerContainer> Servers { get; init; } = [];
+
+    /// <summary>SFTPGo-tjänsten agenten startar: porten som faktiskt används och om den svarar.</summary>
+    public SftpStatus Sftp { get; init; } = new();
 }
 
 /// <summary>

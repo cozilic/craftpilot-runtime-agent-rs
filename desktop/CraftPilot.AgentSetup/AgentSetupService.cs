@@ -152,6 +152,8 @@ public sealed class AgentSetupService
                     nodeName: _nodeName);
             }
 
+            status = CopyStatus(status, sftp: await ReadSftpStatusAsync(ct));
+
             // Agentens servercontainrar bär labeln craftpilot.managed. Panelen
             // visar dem i översikten så det syns att noden faktiskt hostar
             // servrar, utan att fråga mastern.
@@ -230,6 +232,50 @@ public sealed class AgentSetupService
         return answered.Count == 0
             ? (0, null, false)
             : (answered.Sum(result => result.Online), answered.Sum(result => result.Max), true);
+    }
+
+    /// <summary>
+    /// SFTPGo-containerns värdport och om tjänsten svarar. Porten läses ur
+    /// Docker i stället för ur .env.desktop: agenten tar nästa lediga port när
+    /// den föredragna är upptagen, så env-filen kan peka på en annan port än
+    /// den som faktiskt används.
+    /// </summary>
+    private async Task<SftpStatus> ReadSftpStatusAsync(CancellationToken ct)
+    {
+        var enabled = SftpStatus.IsEnabled(ReadEnv("CRAFTPILOT_SFTP_ENABLED"));
+        var preferred = SftpStatus.ParsePort(ReadEnv("CRAFTPILOT_SFTP_PORT"));
+
+        var inspect = await RunAsync(
+            "docker",
+            ["inspect", "--format", "{{.State.Running}}\t{{json .HostConfig.PortBindings}}", SftpStatus.ContainerName],
+            TimeSpan.FromSeconds(5),
+            null,
+            ct);
+
+        if (inspect.ExitCode != 0)
+        {
+            // Ingen container: agenten är inte installerad, eller så är SFTP avstängt.
+            return new SftpStatus
+            {
+                PreferredPort = preferred,
+                Error = enabled ? FirstLine(inspect.Combined) : null,
+            };
+        }
+
+        var parts = inspect.StdOut.Trim().Split('\t', 2);
+        var running = string.Equals(parts.ElementAtOrDefault(0), "true", StringComparison.OrdinalIgnoreCase);
+        var bound = SftpStatus.BoundPortFrom(parts.ElementAtOrDefault(1));
+        var responding = running && bound is not null
+            ? await SftpStatus.ProbeAsync(bound.Value, TimeSpan.FromMilliseconds(800), ct)
+            : (bool?)null;
+
+        return new SftpStatus
+        {
+            PreferredPort = preferred,
+            BoundPort = bound,
+            Running = running,
+            Responding = responding,
+        };
     }
 
     public Task<OperationResponse> InstallAsync(InstallRequest request, CancellationToken ct = default) =>
@@ -1022,7 +1068,8 @@ public sealed class AgentSetupService
         string? claimCode = null,
         string? nodeName = null,
         HostStats? stats = null,
-        IReadOnlyList<ServerContainer>? servers = null) =>
+        IReadOnlyList<ServerContainer>? servers = null,
+        SftpStatus? sftp = null) =>
         new()
         {
             DockerOk = dockerOk ?? source.DockerOk,
@@ -1052,6 +1099,7 @@ public sealed class AgentSetupService
             Busy = source.Busy,
             Stats = stats ?? source.Stats,
             Servers = servers ?? source.Servers,
+            Sftp = sftp ?? source.Sftp,
         };
 
     private sealed record DockerCheck(string State, string? Version, string? Error, bool DesktopInstalled);

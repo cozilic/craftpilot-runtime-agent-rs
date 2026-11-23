@@ -90,6 +90,17 @@ public static class DiagnosticsReport
         }
         text.AppendLine();
 
+        text.AppendLine("[SFTP]");
+        text.AppendLine($"Önskad port: {status.Sftp.PreferredPort?.ToString(CultureInfo.InvariantCulture) ?? "—"}");
+        text.AppendLine($"Port: {status.Sftp.BoundPort?.ToString(CultureInfo.InvariantCulture) ?? "—"}");
+        text.AppendLine($"Container: {(status.Sftp.Running ? "körs" : "körs inte")}");
+        text.AppendLine($"Svarar: {(status.Sftp.Responding switch { true => "ja", false => "nej", null => "—" })}");
+        if (!string.IsNullOrWhiteSpace(status.Sftp.Error))
+        {
+            text.AppendLine($"Fel: {status.Sftp.Error}");
+        }
+        text.AppendLine();
+
         text.AppendLine("[Värden]");
         text.AppendLine($"Serverdata: {status.DataDir}");
         text.AppendLine($"Installationsfiler: {status.InstallDir}");
