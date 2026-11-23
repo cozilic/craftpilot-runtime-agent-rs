@@ -198,7 +198,14 @@ impl SftpGoClient {
             desired_users.insert(user.username.clone());
             match self.get_user(&user.username).await? {
                 Some(current) if user_matches(&current, &payload) => {}
-                Some(_) => self.update_user(&user.username, &payload).await?,
+                Some(current) => {
+                    // SFTPGo behåller en öppen sessions inställningar, så en ny
+                    // mapp kräver att sessionerna stängs. Nycklar och ägare får
+                    // däremot inte kasta ut en pågående överföring.
+                    let disconnect = folders_changed(&current, &payload);
+                    self.update_user(&user.username, &payload, disconnect)
+                        .await?
+                }
                 None => self.create_user(&payload).await?,
             }
         }
@@ -281,11 +288,16 @@ impl SftpGoClient {
         expect_success(status, "create user", &value)
     }
 
-    async fn update_user(&mut self, username: &str, payload: &Value) -> Result<()> {
+    async fn update_user(
+        &mut self,
+        username: &str,
+        payload: &Value,
+        disconnect: bool,
+    ) -> Result<()> {
         let (status, value) = self
             .send(
                 Method::PUT,
-                &format!("api/v2/users/{}", path_segment(username)?),
+                &user_path(username, disconnect)?,
                 Some(payload),
             )
             .await?;
@@ -551,31 +563,51 @@ fn user_matches(existing: &Value, desired: &Value) -> bool {
             })
             .unwrap_or_default()
     };
-    let folders = |value: &Value| -> BTreeSet<(String, String)> {
-        value
-            .get("virtual_folders")
-            .and_then(Value::as_array)
-            .map(|folders| {
-                folders
-                    .iter()
-                    .filter_map(|folder| {
-                        Some((
-                            folder.get("name")?.as_str()?.to_string(),
-                            folder.get("virtual_path")?.as_str()?.to_string(),
-                        ))
-                    })
-                    .collect()
-            })
-            .unwrap_or_default()
-    };
-
     existing.get("status").and_then(Value::as_i64) == Some(1)
         && existing.get("home_dir").and_then(Value::as_str)
             == desired.get("home_dir").and_then(Value::as_str)
         && existing.get("uid").and_then(Value::as_u64) == desired.get("uid").and_then(Value::as_u64)
         && existing.get("gid").and_then(Value::as_u64) == desired.get("gid").and_then(Value::as_u64)
         && keys(existing) == keys(desired)
-        && folders(existing) == folders(desired)
+        && user_folders(existing) == user_folders(desired)
+}
+
+/// Kontots mappar som SFTPGo har dem: namn och virtuell sökväg.
+fn user_folders(value: &Value) -> BTreeSet<(String, String)> {
+    value
+        .get("virtual_folders")
+        .and_then(Value::as_array)
+        .map(|folders| {
+            folders
+                .iter()
+                .filter_map(|folder| {
+                    Some((
+                        folder.get("name")?.as_str()?.to_string(),
+                        folder.get("virtual_path")?.as_str()?.to_string(),
+                    ))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Sant när uppdateringen lägger till eller tar bort mappar för kontot. Bara då
+/// ska SFTPGo stänga kontots sessioner: SFTPGo läser kontot vid inloggning, så
+/// en ny mapp syns annars först vid nästa inloggning. Ett nyckel- eller
+/// ägarbyte lämnar pågående överföringar i fred.
+fn folders_changed(current: &Value, desired: &Value) -> bool {
+    user_folders(current) != user_folders(desired)
+}
+
+/// Kontots URL. `disconnect=1` stänger kontots öppna sessioner efter
+/// uppdateringen, vilket krävs för att en ny mapp ska synas direkt.
+fn user_path(username: &str, disconnect: bool) -> Result<String> {
+    let segment = path_segment(username)?;
+    Ok(if disconnect {
+        format!("api/v2/users/{segment}?disconnect=1")
+    } else {
+        format!("api/v2/users/{segment}")
+    })
 }
 
 /// En servermapp som får mountas: namnet mastern använder, sökvägen i
@@ -1110,6 +1142,115 @@ mod tests {
         std::fs::remove_dir_all(&root).unwrap();
     }
 
+    #[test]
+    fn the_user_path_disconnects_only_when_asked() {
+        assert_eq!(user_path("u42", false).unwrap(), "api/v2/users/u42");
+        assert_eq!(
+            user_path("u42", true).unwrap(),
+            "api/v2/users/u42?disconnect=1"
+        );
+        assert!(user_path("u/42", true).is_err());
+    }
+
+    #[test]
+    fn folders_changed_only_when_the_folder_list_differs() {
+        let one = json!({"virtual_folders": [
+            {"name": "myserver-ab12cd", "virtual_path": "/myserver-ab12cd"},
+        ]});
+        let same = json!({"virtual_folders": [
+            {"name": "myserver-ab12cd", "virtual_path": "/myserver-ab12cd"},
+        ]});
+        let two = json!({"virtual_folders": [
+            {"name": "myserver-ab12cd", "virtual_path": "/myserver-ab12cd"},
+            {"name": "extra-ab12cd", "virtual_path": "/extra-ab12cd"},
+        ]});
+        let remapped = json!({"virtual_folders": [
+            {"name": "myserver-ab12cd", "virtual_path": "/annat"},
+        ]});
+
+        assert!(!folders_changed(&one, &same));
+        assert!(folders_changed(&one, &two));
+        assert!(folders_changed(&two, &one));
+        assert!(folders_changed(&one, &remapped));
+        // SFTPGo kan svara utan fältet när kontot saknar mappar.
+        assert!(!folders_changed(
+            &json!({}),
+            &json!({"virtual_folders": []})
+        ));
+        assert!(folders_changed(&json!({}), &two));
+    }
+
+    const SECOND_SERVER_ID: &str = "2b1c8d2f-aaaa-bbbb-cccc-ddddeeeeffff";
+
+    fn two_folder_user(key: &str) -> Value {
+        json!({
+            "username": "u42",
+            "enabled": true,
+            "public_keys": [key],
+            "folders": [
+                { "name": "myserver-ab12cd", "server_id": SERVER_ID },
+                { "name": "extra-ab12cd", "server_id": SECOND_SERVER_ID },
+            ],
+        })
+    }
+
+    #[tokio::test]
+    async fn apply_disconnects_sessions_only_when_the_folder_list_changes() {
+        let root = temp_dir("disconnect");
+        std::fs::create_dir_all(root.join(SERVER_ID)).unwrap();
+        std::fs::create_dir_all(root.join(SECOND_SERVER_ID)).unwrap();
+        let server = MockSftpGo::start().await;
+        let mut client = server.client().await;
+        let cfg = ApplyConfig {
+            data_root: &root,
+            file_uid: None,
+            file_gid: None,
+        };
+        let key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAII27tFLzuyH+m76qcssy22gIecV3AWkMIPWBSZvkSS test@host";
+
+        client
+            .apply(&state(vec![user("u42", true, true)]), &cfg)
+            .await
+            .unwrap();
+        assert!(!server
+            .requests()
+            .iter()
+            .any(|request| request.contains("disconnect=1")));
+
+        // En mapp till: sessionerna stängs så mappen syns vid nästa anslutning.
+        server.clear_requests();
+        client
+            .apply(&state(vec![two_folder_user(key)]), &cfg)
+            .await
+            .unwrap();
+        let requests = server.requests();
+        assert!(
+            requests.contains(&"PUT /api/v2/users/u42?disconnect=1".to_string()),
+            "{requests:?}"
+        );
+
+        // Bara en ny nyckel: ingen frånkoppling, pågående överföringar lämnas.
+        server.clear_requests();
+        let other_key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAII27tFLzuyH+m76qcssy22gIecV3AWkMIPWBSZvkSS laptop@host";
+        client
+            .apply(&state(vec![two_folder_user(other_key)]), &cfg)
+            .await
+            .unwrap();
+        let requests = server.requests();
+        assert!(
+            requests.contains(&"PUT /api/v2/users/u42".to_string()),
+            "{requests:?}"
+        );
+        assert!(
+            !requests
+                .iter()
+                .any(|request| request.contains("disconnect=1")),
+            "{requests:?}"
+        );
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
     /// Minimal SFTPGo-admin för testerna: bara de endpoints klienten
     /// använder, med samma svarsformer som 2.6.
     struct MockSftpGo {
@@ -1192,14 +1333,19 @@ mod tests {
     }
 
     async fn handle(mut stream: TcpStream, state: Arc<Mutex<MockState>>) -> std::io::Result<()> {
-        let Some((method, path, body)) = read_request(&mut stream).await else {
+        let Some((method, target, body)) = read_request(&mut stream).await else {
             return Ok(());
         };
         state
             .lock()
             .unwrap()
             .requests
-            .push(format!("{method} {path}"));
+            .push(format!("{method} {target}"));
+        let path = target
+            .split('?')
+            .next()
+            .unwrap_or(target.as_str())
+            .to_string();
 
         let (status, payload) = route(&method, &path, &body, &state);
         write_response(&mut stream, status, &payload).await
@@ -1316,7 +1462,6 @@ mod tests {
         let mut first = lines.next()?.split_whitespace();
         let method = first.next()?.to_string();
         let target = first.next()?.to_string();
-        let path = target.split('?').next()?.to_string();
 
         let length = head
             .lines()
@@ -1338,7 +1483,7 @@ mod tests {
         }
         body.truncate(length);
 
-        Some((method, path, body))
+        Some((method, target, body))
     }
 
     async fn write_response(
