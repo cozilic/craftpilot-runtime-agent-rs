@@ -116,6 +116,9 @@ window.CraftPilotI18n = (function () {
 
       'docker.noticeTitle': 'Docker Desktop krävs',
       'docker.download': 'Hämta Docker Desktop',
+      'docker.install': 'Hämta och öppna installationsprogrammet',
+      'docker.fetching': 'Hämtar installationsprogrammet…',
+      'docker.fetchFailed': 'Kunde inte hämta installationsprogrammet: {error} Använd länken Hämta Docker Desktop.',
       'docker.missingCommandTitle': 'Docker-kommandot hittades inte',
       'docker.missingDesktopTitle': 'Docker Desktop saknas',
       'docker.notRunningTitle': 'Docker Desktop är inte igång',
@@ -353,6 +356,9 @@ window.CraftPilotI18n = (function () {
 
       'docker.noticeTitle': 'Docker Desktop is required',
       'docker.download': 'Get Docker Desktop',
+      'docker.install': 'Download and open the installer',
+      'docker.fetching': 'Downloading the installer…',
+      'docker.fetchFailed': 'Could not download the installer: {error} Use the Get Docker Desktop link.',
       'docker.missingCommandTitle': 'The docker command was not found',
       'docker.missingDesktopTitle': 'Docker Desktop is missing',
       'docker.notRunningTitle': 'Docker Desktop is not running',

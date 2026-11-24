@@ -21,6 +21,11 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Testerna använder den interna konstruktorn med injicerade delar. -->
+    <InternalsVisibleTo Include="CraftPilot.AgentSetup.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <Content Remove="wwwroot\**\*" />
     <EmbeddedResource Include="wwwroot\index.html" LogicalName="wwwroot.index.html" />
     <EmbeddedResource Include="wwwroot\app.css" LogicalName="wwwroot.app.css" />
