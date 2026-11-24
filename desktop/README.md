@@ -27,9 +27,10 @@ Om WebView2 Runtime saknas visas en upplysning och panelen öppnas i den vanliga
 stället. Om Docker Desktop saknas visar panelen en varningsruta med en knapp som hämtar Dockers
 officiella installationsprogram till `%TEMP%`, verifierar Authenticode-signaturen och startar det
 (UAC och Docker:s egen guide sköter resten), plus en länk till Docker för manuell nedladdning.
-Medan filen laddas visar rutan procent och hämtad storlek. Nedladdningen skrivs till
+Medan filen laddas visar rutan procent och hämtad storlek. **Avbryt hämtningen** stoppar en
+pågående nedladdning direkt. Nedladdningen skrivs till
 `Docker Desktop Installer.exe.part` och får sitt riktiga namn först när allt är hämtat; en
-halvfärdig fil tas bort innan nästa försök.
+halvfärdig fil tas bort vid avbrott och innan nästa försök.
 Installationen av agenten är inaktiverad tills Docker är redo. Om Docker Desktop finns men motorn
 inte är igång visas i stället en uppmaning att starta Docker Desktop. Inga compose-filer skrivs
 förrän Docker är redo.

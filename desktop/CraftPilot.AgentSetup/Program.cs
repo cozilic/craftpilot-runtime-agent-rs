@@ -170,6 +170,10 @@ app.MapPost("/api/docker-install", async (DockerDesktopInstaller installer, Canc
 app.MapGet("/api/docker-install/progress", (DockerDesktopInstaller installer) =>
     Results.Ok(installer.Progress));
 
+// Avbryter en pågående nedladdning och städar den halvfärdiga filen.
+app.MapPost("/api/docker-install/cancel", (DockerDesktopInstaller installer) =>
+    Results.Ok(new { cancelled = installer.Cancel() }));
+
 // Läget för en pågående nedladdning, så baren kan visa procent.
 app.MapGet("/api/panel-update/progress", (PanelUpdater updater) =>
     Results.Ok(updater.Progress));

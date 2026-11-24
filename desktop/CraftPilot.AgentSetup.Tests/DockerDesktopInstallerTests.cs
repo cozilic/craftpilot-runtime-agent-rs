@@ -101,6 +101,53 @@ public sealed class DockerDesktopInstallerTests : IDisposable
     }
 
     [Fact]
+    public async Task Cancels_a_running_download_and_removes_the_partial_file()
+    {
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var stream = new GatedStream(Encoding.ASCII.GetBytes("MZ01234567"), release.Task);
+        var launched = false;
+        var installer = CreateInstaller(
+            _ => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StreamContent(stream) { Headers = { ContentLength = 10 } },
+            }),
+            verify: _ => true,
+            launch: _ =>
+            {
+                launched = true;
+                return true;
+            });
+
+        var download = installer.DownloadAndStartAsync();
+        await WaitUntilAsync(() => installer.Progress.Received > 0);
+
+        Assert.True(installer.Cancel());
+        Assert.False(installer.Cancel());
+
+        var result = await download;
+
+        release.SetResult();
+
+        Assert.False(result.Ok);
+        Assert.Equal(DockerDesktopInstaller.CancelledMessage, result.Message);
+        Assert.False(launched);
+        Assert.False(installer.Progress.Downloading);
+        Assert.False(File.Exists(PartialPath));
+        Assert.False(File.Exists(InstallerPath));
+    }
+
+    [Fact]
+    public void Cancel_does_nothing_when_no_download_is_running()
+    {
+        var installer = CreateInstaller(
+            _ => Task.FromResult(Respond("MZ")),
+            verify: _ => true,
+            launch: _ => true);
+
+        Assert.False(installer.Cancel());
+    }
+
+    [Fact]
     public async Task Removes_a_partial_file_from_an_earlier_attempt()
     {
         File.WriteAllText(PartialPath, "halvfärdig");
