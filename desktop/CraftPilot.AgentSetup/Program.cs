@@ -17,6 +17,7 @@ builder.Services.AddSingleton<AgentSetupService>();
 builder.Services.AddSingleton<PanelSettingsStore>();
 builder.Services.AddSingleton<UpdateChecker>();
 builder.Services.AddSingleton<PanelUpdater>();
+builder.Services.AddSingleton<DockerDesktopInstaller>();
 builder.Logging.ClearProviders();
 
 var app = builder.Build();
@@ -158,6 +159,12 @@ app.MapPost("/api/servers/{serverId}/restart", async (
 // En redigerad textfil med versioner, Docker-läge, servrar och agentlogg.
 app.MapGet("/api/diagnostics", async (AgentSetupService service, CancellationToken ct) =>
     Results.Ok(new { text = await service.GetDiagnosticsAsync(ct) }));
+
+// Hämtar Docker Desktops officiella installationsprogram till %TEMP%,
+// verifierar Authenticode-signaturen och startar det. Panelen installerar
+// aldrig Docker tyst; webbläsarlänken i panelen är kvar som fallback.
+app.MapPost("/api/docker-install", async (DockerDesktopInstaller installer, CancellationToken ct) =>
+    Results.Ok(await installer.DownloadAndStartAsync(ct)));
 
 // Läget för en pågående nedladdning, så baren kan visa procent.
 app.MapGet("/api/panel-update/progress", (PanelUpdater updater) =>

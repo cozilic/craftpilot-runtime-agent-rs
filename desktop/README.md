@@ -24,9 +24,12 @@ välj **Mer information → Kör ändå**. Bygg den gärna själv från källkod
 - Utgående HTTPS till `https://craftpilot.se`.
 
 Om WebView2 Runtime saknas visas en upplysning och panelen öppnas i den vanliga webbläsaren i
-stället. Om Docker Desktop saknas visar panelen en varningsruta med nedladdningslänk och
-inaktiverar installationen. Om Docker Desktop finns men motorn inte är igång visas i stället en
-uppmaning att starta Docker Desktop. Inga compose-filer skrivs förrän Docker är redo.
+stället. Om Docker Desktop saknas visar panelen en varningsruta med en knapp som hämtar Dockers
+officiella installationsprogram till `%TEMP%`, verifierar Authenticode-signaturen och startar det
+(UAC och Docker:s egen guide sköter resten), plus en länk till Docker för manuell nedladdning.
+Installationen av agenten är inaktiverad tills Docker är redo. Om Docker Desktop finns men motorn
+inte är igång visas i stället en uppmaning att starta Docker Desktop. Inga compose-filer skrivs
+förrän Docker är redo.
 
 ## Använd panelen
 
@@ -180,6 +183,11 @@ bara navigera till panelens egen loopback-adress; externa länkar öppnas i stan
 får åtkomst till Docker-socketen, vilket i praktiken är root på värden – behandla den som en
 privilegierad tjänst.
 
+Panelen hämtar Docker Desktop-installationsprogrammet från `https://desktop.docker.com/` och kör
+det bara om Authenticode-signaturen är giltig och certifikatets utgivare är Docker. Nedladdningen
+får inte komma från någon annan värd, och filen tas bort när kontrollen fallerar. Panelen
+installerar aldrig Docker tyst.
+
 EXE-filen är inte kodsignerad. Panelen jämför sin version med senaste GitHub-releasen och visar
 en länk när en nyare version finns. Ladda bara ner den från repots GitHub Releases eller bygg
 den själv.
@@ -228,8 +236,13 @@ Get-MpComputerStatus | Select-Object SmartAppControlState
 
 **Docker Desktop saknas**
 
-Panelen visar **Docker Desktop saknas** och knappen för installation är inaktiverad. Hämta Docker
-Desktop via länken i panelen, installera med Linux-containrar och klicka på **Kontrollera igen**.
+Panelen visar **Docker Desktop saknas** och knappen för installation är inaktiverad. **Hämta och
+oppna installationsprogrammet** laddar ner Dockers officiella installationsprogram till `%TEMP%`
+och startar det först sedan Authenticode-signaturen verifierats med Docker som utgivare. Windows
+frågar om behörighet och installationsprogrammet visar Docker:s villkor och WSL2-val. Länken
+**Hämta Docker Desktop** finns kvar som fallback om hämtningen eller signaturkontrollen
+misslyckas, eller om du hellre installerar själv. Installera med Linux-containrar och klicka på
+**Kontrollera igen**.
 
 **Docker Desktop är installerat men inte igång**
 

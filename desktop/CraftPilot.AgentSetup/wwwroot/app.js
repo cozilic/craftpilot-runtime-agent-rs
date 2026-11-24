@@ -373,11 +373,15 @@ function shortError(value) {
 function setDockerNotice(status, dockerState) {
   const notice = $('docker-notice');
   const download = $('docker-download');
+  const install = $('docker-install');
+  const installStatus = $('docker-install-status');
   const cardLink = $('docker-link');
 
   if (dockerState === 'ready') {
     notice.hidden = true;
     download.hidden = true;
+    install.hidden = true;
+    installStatus.hidden = true;
     cardLink.hidden = true;
     return;
   }
@@ -397,6 +401,10 @@ function setDockerNotice(status, dockerState) {
       : t('docker.errorText'));
 
   download.hidden = !notInstalled || desktopPresent;
+  install.hidden = !notInstalled || desktopPresent;
+  if (install.hidden) {
+    installStatus.hidden = true;
+  }
   cardLink.hidden = !notInstalled || desktopPresent;
 }
 
@@ -1071,6 +1079,26 @@ function install() {
 
 $('install').addEventListener('click', install);
 $('install-panel').addEventListener('click', install);
+
+// Hämtar Docker Desktops installationsprogram via panelen. Signaturkontrollen
+// sker i panelen; misslyckas den finns webbläsarlänken kvar bredvid knappen.
+$('docker-install').addEventListener('click', async () => {
+  const button = $('docker-install');
+  const status = $('docker-install-status');
+  button.disabled = true;
+  status.hidden = false;
+  status.textContent = t('docker.fetching');
+
+  try {
+    const result = await api('/api/docker-install', { method: 'POST', body: '{}' });
+    status.textContent = result.message;
+  } catch (error) {
+    status.textContent = t('docker.fetchFailed', { error: shortError(error.message) });
+  } finally {
+    button.disabled = false;
+  }
+});
+
 // Hämtar panelens nästa version från GitHub, byter ut exen och startar om
 // panelen. Den här sidan stängs när den nya panelen tar över.
 async function runPanelUpdate() {
