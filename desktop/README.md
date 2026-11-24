@@ -106,7 +106,7 @@ vägen när **Bara manuellt** är valt. Nästa automatiska kontroll räknas frå
 inte från att panelen startade.
 
 **Kontrollera nu** visar vad som händer i panelens progress-bar: **Kontrollerar ny version…**, och
-sedan **Ny version v0.12.3 hittad** under knappen. Finns en nyare version blir **Ladda ner och
+sedan **Ny version v0.12.4 hittad** under knappen. Finns en nyare version blir **Ladda ner och
 starta om** synlig på samma rad — den laddar ner exen och visar **Hämtar versionsinformation…**,
 **Hämtar ny version…** (med procent), **Kontrollerar filen…**, **Installerar panelen…** och
 **Startar om panelen…**. Samma knapp finns i bannern i Översikt.
