@@ -32,8 +32,9 @@ pågående nedladdning direkt. Nedladdningen skrivs till
 `Docker Desktop Installer.exe.part` och får sitt riktiga namn först när allt är hämtat; en
 halvfärdig fil tas bort vid avbrott och innan nästa försök.
 Installationen av agenten är inaktiverad tills Docker är redo. Om Docker Desktop finns men motorn
-inte är igång visas i stället en uppmaning att starta Docker Desktop. Inga compose-filer skrivs
-förrän Docker är redo.
+inte är igång visar rutan i stället **Starta Docker Desktop**, som startar programmet utan UAC; en
+kvarglömd docker-CLI utan Docker Desktop räknas som saknad installation och får
+installationsknappen. Inga compose-filer skrivs förrän Docker är redo.
 
 ## Använd panelen
 
@@ -240,8 +241,8 @@ Get-MpComputerStatus | Select-Object SmartAppControlState
 
 **Docker Desktop saknas**
 
-Panelen visar **Docker Desktop saknas** och knappen för installation är inaktiverad. **Hämta och
-oppna installationsprogrammet** laddar ner Dockers officiella installationsprogram till `%TEMP%`
+Panelen visar **Docker Desktop saknas** med knappen **Hämta och öppna installationsprogrammet**.
+Den laddar ner Dockers officiella installationsprogram till `%TEMP%`
 och startar det först sedan Authenticode-signaturen verifierats med Docker som utgivare. Windows
 frågar om behörighet och installationsprogrammet visar Docker:s villkor och WSL2-val. Länken
 **Hämta Docker Desktop** finns kvar som fallback om hämtningen eller signaturkontrollen
@@ -250,8 +251,9 @@ misslyckas, eller om du hellre installerar själv. Installera med Linux-containr
 
 **Docker Desktop är installerat men inte igång**
 
-Panelen visar **Docker Desktop är inte igång**. Starta Docker Desktop och vänta tills motorn är
-redo; panelen hittar den automatiskt inom några sekunder. Installationen är blockerad tills dess.
+Panelen visar **Docker Desktop är inte igång** och knappen **Starta Docker Desktop**, som startar
+Docker Desktop utan UAC. Vänta tills motorn är redo; panelen hittar den automatiskt inom några
+sekunder. Installationen är blockerad tills dess.
 
 **Docker-kommandot hittades inte trots att Docker Desktop finns**
 

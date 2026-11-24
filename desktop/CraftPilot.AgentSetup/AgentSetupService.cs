@@ -1014,23 +1014,7 @@ public sealed class AgentSetupService
         _ => "Docker svarar inte. Kontrollera Docker Desktop och försök igen.",
     };
 
-    private static bool IsDockerDesktopInstalled()
-    {
-        if (!OperatingSystem.IsWindows())
-        {
-            return false;
-        }
-
-        var programFiles = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
-        var localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-
-        return new[]
-        {
-            Path.Combine(programFiles, "Docker", "Docker", "Docker Desktop.exe"),
-            Path.Combine(localAppData, "Docker", "Docker Desktop.exe"),
-            Path.Combine(localAppData, "Programs", "Docker", "Docker Desktop.exe"),
-        }.Any(File.Exists);
-    }
+    private static bool IsDockerDesktopInstalled() => DockerDesktopLocator.Find() is not null;
 
     public void OpenInstallFolder()
     {

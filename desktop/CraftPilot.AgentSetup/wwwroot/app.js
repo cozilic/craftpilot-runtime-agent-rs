@@ -374,6 +374,7 @@ function setDockerNotice(status, dockerState) {
   const notice = $('docker-notice');
   const download = $('docker-download');
   const install = $('docker-install');
+  const start = $('docker-start');
   const cancel = $('docker-cancel');
   const installStatus = $('docker-install-status');
   const cardLink = $('docker-link');
@@ -382,6 +383,7 @@ function setDockerNotice(status, dockerState) {
     notice.hidden = true;
     download.hidden = true;
     install.hidden = true;
+    start.hidden = true;
     cancel.hidden = true;
     installStatus.hidden = true;
     cardLink.hidden = true;
@@ -389,26 +391,33 @@ function setDockerNotice(status, dockerState) {
   }
 
   const notInstalled = dockerState === 'not-installed';
-  const desktopPresent = status.dockerDesktopInstalled === true;
+  // Utan installationsfil på disken är det installation som gäller, även om
+  // ett kvarglömt docker-kommando svarar att motorn inte kör.
+  const missingDesktop = status.dockerDesktopInstalled !== true;
   notice.hidden = false;
 
-  $('docker-notice-title').textContent = notInstalled
-    ? (desktopPresent ? t('docker.missingCommandTitle') : t('docker.missingDesktopTitle'))
-    : (dockerState === 'not-running' ? t('docker.notRunningTitle') : t('docker.noResponseTitle'));
+  $('docker-notice-title').textContent = missingDesktop
+    ? t('docker.missingDesktopTitle')
+    : (notInstalled
+      ? t('docker.missingCommandTitle')
+      : (dockerState === 'not-running' ? t('docker.notRunningTitle') : t('docker.noResponseTitle')));
 
-  $('docker-notice-text').textContent = notInstalled
-    ? (desktopPresent ? t('docker.missingCommandText') : t('docker.missingDesktopText'))
-    : (dockerState === 'not-running'
-      ? t('docker.notRunningText')
-      : t('docker.errorText'));
+  $('docker-notice-text').textContent = missingDesktop
+    ? t('docker.missingDesktopText')
+    : (notInstalled
+      ? t('docker.missingCommandText')
+      : (dockerState === 'not-running'
+        ? t('docker.notRunningText')
+        : t('docker.errorText')));
 
-  download.hidden = !notInstalled || desktopPresent;
-  install.hidden = !notInstalled || desktopPresent;
-  if (install.hidden) {
+  download.hidden = !missingDesktop;
+  install.hidden = !missingDesktop;
+  start.hidden = missingDesktop || dockerState !== 'not-running';
+  if (install.hidden && start.hidden) {
     installStatus.hidden = true;
     cancel.hidden = true;
   }
-  cardLink.hidden = !notInstalled || desktopPresent;
+  cardLink.hidden = !missingDesktop;
 }
 
 // SFTPGo-porten agenten valde. Panelen frågar Docker i stället för att gissa
@@ -1082,6 +1091,31 @@ function install() {
 
 $('install').addEventListener('click', install);
 $('install-panel').addEventListener('click', install);
+
+// Startar ett installerat men stoppat Docker Desktop. Panelen startar bara
+// filen i Dockers vanliga mappar och låter Docker sköta resten.
+$('docker-start').addEventListener('click', async () => {
+  const button = $('docker-start');
+  const status = $('docker-install-status');
+  button.disabled = true;
+  status.hidden = false;
+  status.textContent = t('docker.starting');
+
+  try {
+    const result = await api('/api/docker-desktop/start', { method: 'POST', body: '{}' });
+    if (!result.started) {
+      status.textContent = t('docker.startFailed');
+    }
+  } catch {
+    status.textContent = t('docker.startFailed');
+  } finally {
+    // Docker Desktop behöver några sekunder innan motorn svarar; knappen får
+    // försökas igen om statusen fortfarande är stoppad.
+    window.setTimeout(() => {
+      button.disabled = false;
+    }, 8000);
+  }
+});
 
 // Hämtar Docker Desktops installationsprogram via panelen. Filen är stor, så
 // rutan följer /api/docker-install/progress och visar procent och storlek.
