@@ -99,6 +99,15 @@ public sealed record PanelUpdateResult(
     string? Version,
     string? ReleaseUrl);
 
+/// <summary>Läget för Docker-nedladdningen: mottagna byte och serverns total.</summary>
+public sealed record DockerDownloadProgress(bool Downloading, long Received, long Total)
+{
+    /// <summary>0–100 när Docker skickade Content-Length, annars null.</summary>
+    public int? Percent => Total > 0
+        ? (int)Math.Clamp(Received * 100 / Total, 0, 100)
+        : null;
+}
+
 /// Nedladdningens läge för panelens exe, så baren kan visas i procent i
 /// stället för som en obestämd glidning.
 public sealed record PanelDownloadProgress(bool Active, long Received, long Total)

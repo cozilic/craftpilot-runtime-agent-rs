@@ -166,6 +166,10 @@ app.MapGet("/api/diagnostics", async (AgentSetupService service, CancellationTok
 app.MapPost("/api/docker-install", async (DockerDesktopInstaller installer, CancellationToken ct) =>
     Results.Ok(await installer.DownloadAndStartAsync(ct)));
 
+// Läget för Docker-nedladdningen, så rutan kan visa procent och hämtad storlek.
+app.MapGet("/api/docker-install/progress", (DockerDesktopInstaller installer) =>
+    Results.Ok(installer.Progress));
+
 // Läget för en pågående nedladdning, så baren kan visa procent.
 app.MapGet("/api/panel-update/progress", (PanelUpdater updater) =>
     Results.Ok(updater.Progress));

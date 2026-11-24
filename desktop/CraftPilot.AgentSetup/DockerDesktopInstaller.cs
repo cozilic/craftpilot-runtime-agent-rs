@@ -19,6 +19,9 @@ public sealed class DockerDesktopInstaller
     public const string InstallerFileName = "Docker Desktop Installer.exe";
     public const string FallbackHint = "Använd länken Hämta Docker Desktop i panelen.";
 
+    /// <summary>Ändelsen på den halvfärdiga filen; den flyttas först när allt är hämtat.</summary>
+    public const string PartialFileSuffix = ".part";
+
     private const string ExpectedHost = "desktop.docker.com";
     private const long MaxDownloadBytes = 1_600_000_000;
 
@@ -28,6 +31,10 @@ public sealed class DockerDesktopInstaller
     private readonly string _tempDirectory;
     private readonly Func<string, bool> _signatureIsTrusted;
     private readonly Func<string, bool> _startInstaller;
+
+    private long _received;
+    private long _total = -1;
+    private int _downloading;
     private int _busy;
 
     public DockerDesktopInstaller()
@@ -47,6 +54,12 @@ public sealed class DockerDesktopInstaller
         _signatureIsTrusted = signatureIsTrusted;
         _startInstaller = startInstaller;
     }
+
+    /// <summary>Läget för en pågående nedladdning, så rutan kan visa procent och storlek.</summary>
+    public DockerDownloadProgress Progress => new(
+        Volatile.Read(ref _downloading) == 1,
+        Interlocked.Read(ref _received),
+        Interlocked.Read(ref _total));
 
     public async Task<DockerInstallResult> DownloadAndStartAsync(CancellationToken ct = default)
     {
@@ -73,6 +86,11 @@ public sealed class DockerDesktopInstaller
         }
 
         var path = Path.Combine(_tempDirectory, InstallerFileName);
+        var partialPath = Path.Combine(_tempDirectory, InstallerFileName + PartialFileSuffix);
+
+        // En halvfärdig fil från ett avbrutet eller kraschat försök ska aldrig ligga kvar.
+        TryDelete(partialPath);
+
         try
         {
             using var request = new HttpRequestMessage(HttpMethod.Get, DownloadUrl);
@@ -102,7 +120,11 @@ public sealed class DockerDesktopInstaller
                     $"Installationsprogrammet är större än väntat. {FallbackHint}");
             }
 
-            await DownloadToAsync(response, path, ct);
+            await DownloadToAsync(response, partialPath, ct);
+
+            // Först nu får filen sitt riktiga namn, så en avbruten hämtning aldrig
+            // ser ut som ett färdigt installationsprogram.
+            File.Move(partialPath, path, overwrite: true);
 
             if (!_signatureIsTrusted(path))
             {
@@ -125,35 +147,47 @@ public sealed class DockerDesktopInstaller
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
-            TryDelete(path);
+            TryDelete(partialPath);
             throw;
         }
         catch (Exception ex) when (ex is HttpRequestException or IOException or UnauthorizedAccessException or TaskCanceledException)
         {
-            TryDelete(path);
+            TryDelete(partialPath);
             return new DockerInstallResult(
                 false,
                 $"Kunde inte hämta installationsprogrammet: {ex.Message} {FallbackHint}");
         }
     }
 
-    private static async Task DownloadToAsync(HttpResponseMessage response, string path, CancellationToken ct)
+    private async Task DownloadToAsync(HttpResponseMessage response, string path, CancellationToken ct)
     {
         await using var source = await response.Content.ReadAsStreamAsync(ct);
         await using var target = File.Create(path);
 
-        var buffer = new byte[81920];
-        long received = 0;
-        int read;
-        while ((read = await source.ReadAsync(buffer, ct)) > 0)
-        {
-            received += read;
-            if (received > MaxDownloadBytes)
-            {
-                throw new InvalidDataException("Installationsprogrammet är större än väntat.");
-            }
+        Interlocked.Exchange(ref _received, 0);
+        Interlocked.Exchange(ref _total, response.Content.Headers.ContentLength ?? -1);
+        Volatile.Write(ref _downloading, 1);
 
-            await target.WriteAsync(buffer.AsMemory(0, read), ct);
+        try
+        {
+            var buffer = new byte[81920];
+            long received = 0;
+            int read;
+            while ((read = await source.ReadAsync(buffer, ct)) > 0)
+            {
+                received += read;
+                if (received > MaxDownloadBytes)
+                {
+                    throw new InvalidDataException("Installationsprogrammet är större än väntat.");
+                }
+
+                await target.WriteAsync(buffer.AsMemory(0, read), ct);
+                Interlocked.Exchange(ref _received, received);
+            }
+        }
+        finally
+        {
+            Volatile.Write(ref _downloading, 0);
         }
     }
 
