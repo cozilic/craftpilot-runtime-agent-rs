@@ -1080,8 +1080,9 @@ function install() {
 $('install').addEventListener('click', install);
 $('install-panel').addEventListener('click', install);
 
-// Hämtar Docker Desktops installationsprogram via panelen. Signaturkontrollen
-// sker i panelen; misslyckas den finns webbläsarlänken kvar bredvid knappen.
+// Hämtar Docker Desktops installationsprogram via panelen. Filen är stor, så
+// rutan följer /api/docker-install/progress och visar procent och storlek.
+// Signaturkontrollen sker i panelen; misslyckas den finns webbläsarlänken kvar.
 $('docker-install').addEventListener('click', async () => {
   const button = $('docker-install');
   const status = $('docker-install-status');
@@ -1089,12 +1090,38 @@ $('docker-install').addEventListener('click', async () => {
   status.hidden = false;
   status.textContent = t('docker.fetching');
 
+  const progress = window.setInterval(async () => {
+    try {
+      const current = await api('/api/docker-install/progress');
+      if (!current.downloading) {
+        return;
+      }
+
+      const received = formatBytes(current.received);
+      if (current.percent == null) {
+        status.textContent = current.total > 0
+          ? t('docker.fetchingBytes', { received, total: formatBytes(current.total) })
+          : t('docker.fetchingReceived', { received });
+        return;
+      }
+
+      status.textContent = t('docker.fetchingProgress', {
+        percent: current.percent,
+        received,
+        total: formatBytes(current.total),
+      });
+    } catch {
+      // Panelen svarar inte just nu; nästa intervall försöker igen.
+    }
+  }, 700);
+
   try {
     const result = await api('/api/docker-install', { method: 'POST', body: '{}' });
     status.textContent = result.message;
   } catch (error) {
     status.textContent = t('docker.fetchFailed', { error: shortError(error.message) });
   } finally {
+    window.clearInterval(progress);
     button.disabled = false;
   }
 });
