@@ -374,6 +374,7 @@ function setDockerNotice(status, dockerState) {
   const notice = $('docker-notice');
   const download = $('docker-download');
   const install = $('docker-install');
+  const cancel = $('docker-cancel');
   const installStatus = $('docker-install-status');
   const cardLink = $('docker-link');
 
@@ -381,6 +382,7 @@ function setDockerNotice(status, dockerState) {
     notice.hidden = true;
     download.hidden = true;
     install.hidden = true;
+    cancel.hidden = true;
     installStatus.hidden = true;
     cardLink.hidden = true;
     return;
@@ -404,6 +406,7 @@ function setDockerNotice(status, dockerState) {
   install.hidden = !notInstalled || desktopPresent;
   if (install.hidden) {
     installStatus.hidden = true;
+    cancel.hidden = true;
   }
   cardLink.hidden = !notInstalled || desktopPresent;
 }
@@ -1085,8 +1088,11 @@ $('install-panel').addEventListener('click', install);
 // Signaturkontrollen sker i panelen; misslyckas den finns webbläsarlänken kvar.
 $('docker-install').addEventListener('click', async () => {
   const button = $('docker-install');
+  const cancel = $('docker-cancel');
   const status = $('docker-install-status');
   button.disabled = true;
+  cancel.hidden = false;
+  cancel.disabled = false;
   status.hidden = false;
   status.textContent = t('docker.fetching');
 
@@ -1122,7 +1128,29 @@ $('docker-install').addEventListener('click', async () => {
     status.textContent = t('docker.fetchFailed', { error: shortError(error.message) });
   } finally {
     window.clearInterval(progress);
+    cancel.hidden = true;
+    cancel.disabled = false;
     button.disabled = false;
+  }
+});
+
+// Avbryter en stor hämtning mitt i. Panelen tar bort .part-filen direkt, så
+// nästa försök börjar om från noll i stället för att vänta klart.
+$('docker-cancel').addEventListener('click', async () => {
+  const cancel = $('docker-cancel');
+  const status = $('docker-install-status');
+  cancel.disabled = true;
+  status.textContent = t('docker.cancelling');
+
+  try {
+    const result = await api('/api/docker-install/cancel', { method: 'POST', body: '{}' });
+    if (!result.cancelled) {
+      // Hämtningen hann bli klar; resultatet visas när anropet svarar.
+      cancel.disabled = false;
+    }
+  } catch (error) {
+    cancel.disabled = false;
+    status.textContent = t('docker.cancelFailed', { error: shortError(error.message) });
   }
 });
 

@@ -19,6 +19,9 @@ public sealed class DockerDesktopInstaller
     public const string InstallerFileName = "Docker Desktop Installer.exe";
     public const string FallbackHint = "Använd länken Hämta Docker Desktop i panelen.";
 
+    public const string CancelledMessage =
+        "Hämtningen avbröts och den halvfärdiga filen togs bort. Inget startades.";
+
     /// <summary>Ändelsen på den halvfärdiga filen; den flyttas först när allt är hämtat.</summary>
     public const string PartialFileSuffix = ".part";
 
@@ -36,6 +39,7 @@ public sealed class DockerDesktopInstaller
     private long _total = -1;
     private int _downloading;
     private int _busy;
+    private CancellationTokenSource? _cts;
 
     public DockerDesktopInstaller()
         : this(DefaultHttp, Path.GetTempPath(), DockerDesktopSignature.IsTrusted, StartInstaller)
@@ -61,6 +65,30 @@ public sealed class DockerDesktopInstaller
         Interlocked.Read(ref _received),
         Interlocked.Read(ref _total));
 
+    /// <summary>
+    /// Avbryter en pågående hämtning. Den halvfärdiga filen städas av samma
+    /// felväg som ett avbrott, så inget ligger kvar i %TEMP% mellan försök.
+    /// </summary>
+    public bool Cancel()
+    {
+        var cts = Volatile.Read(ref _cts);
+        if (cts is null || cts.IsCancellationRequested)
+        {
+            return false;
+        }
+
+        try
+        {
+            cts.Cancel();
+            return true;
+        }
+        catch (ObjectDisposedException)
+        {
+            // Hämtningen hann precis avsluta.
+            return false;
+        }
+    }
+
     public async Task<DockerInstallResult> DownloadAndStartAsync(CancellationToken ct = default)
     {
         if (Interlocked.CompareExchange(ref _busy, 1, 0) != 0)
@@ -68,12 +96,18 @@ public sealed class DockerDesktopInstaller
             return new DockerInstallResult(false, "Panelen hämtar redan installationsprogrammet.");
         }
 
+        // Panelen kan avbryta hämtningen med Cancel(); token länkas därför
+        // ihop med anropets egen token.
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        Volatile.Write(ref _cts, cts);
+
         try
         {
-            return await DownloadAndStartCoreAsync(ct);
+            return await DownloadAndStartCoreAsync(cts.Token);
         }
         finally
         {
+            Volatile.Write(ref _cts, null);
             Volatile.Write(ref _busy, 0);
         }
     }
@@ -121,6 +155,7 @@ public sealed class DockerDesktopInstaller
             }
 
             await DownloadToAsync(response, partialPath, ct);
+            ct.ThrowIfCancellationRequested();
 
             // Först nu får filen sitt riktiga namn, så en avbruten hämtning aldrig
             // ser ut som ett färdigt installationsprogram.
@@ -148,7 +183,7 @@ public sealed class DockerDesktopInstaller
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
             TryDelete(partialPath);
-            throw;
+            return new DockerInstallResult(false, CancelledMessage);
         }
         catch (Exception ex) when (ex is HttpRequestException or IOException or UnauthorizedAccessException or TaskCanceledException)
         {
