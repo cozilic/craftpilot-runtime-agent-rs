@@ -7,7 +7,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>CraftPilot.AgentSetup</AssemblyName>
     <RootNamespace>CraftPilot.AgentSetup</RootNamespace>
-    <Version>0.12.1</Version>
+    <Version>0.12.2</Version>
     <OutputType>WinExe</OutputType>
     <ApplicationIcon>Assets\craftpilot.ico</ApplicationIcon>
     <InvariantGlobalization>true</InvariantGlobalization>
