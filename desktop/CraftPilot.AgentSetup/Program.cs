@@ -174,6 +174,10 @@ app.MapGet("/api/docker-install/progress", (DockerDesktopInstaller installer) =>
 app.MapPost("/api/docker-install/cancel", (DockerDesktopInstaller installer) =>
     Results.Ok(new { cancelled = installer.Cancel() }));
 
+// Startar Docker Desktop när det är installerat men motorn inte kör.
+app.MapPost("/api/docker-desktop/start", () =>
+    Results.Ok(new { started = DockerDesktopLauncher.Start() }));
+
 // Läget för en pågående nedladdning, så baren kan visa procent.
 app.MapGet("/api/panel-update/progress", (PanelUpdater updater) =>
     Results.Ok(updater.Progress));
