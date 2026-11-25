@@ -98,25 +98,8 @@ impl Reporter {
         let disk_used_mb = self.disk_usage(server_id, &server_root).await;
         let artifact_present = artifact.map(|artifact| has_artifact(&server_root, &artifact));
 
-        let mut cursor = since.map(str::to_string);
         let lines = docker.logs_since(server_id, since).await?;
-        let mut logs = Vec::new();
-        for (ts, text) in lines {
-            // Docker `--since` är inkluderande: gränsraden har redan skickats.
-            if !is_new(cursor.as_deref(), &ts) {
-                continue;
-            }
-            cursor = Some(ts.clone());
-            let text = sanitize(&text);
-            if text.is_empty() {
-                continue;
-            }
-            self.apply_player_event(server_id, &text);
-            logs.push((ts, text));
-        }
-        if logs.len() > LOG_WINDOW {
-            logs.drain(..logs.len() - LOG_WINDOW);
-        }
+        let (logs, cursor) = self.collect_new_lines(server_id, since, lines);
 
         // Server-list-ping är källan när servern svarar: konsolraderna
         // räknar bara vanilla-engelska "joined/left the game" och tappar
@@ -150,6 +133,55 @@ impl Reporter {
             logs,
             cursor,
         })
+    }
+
+    /// Nya konsolrader sedan cursorn UTAN stats, ping eller disk (2026-11-25).
+    /// Den snabba loggposten kör varje sekund och får inte kosta en
+    /// `docker stats`-läsning per server och varv; bara `docker logs`.
+    ///
+    /// Loggkursorn returneras bara tillsammans med raderna: anroparen flyttar
+    /// den när mastern kvitterat, så en tappad post skickas om i stället för
+    /// att tappas (rapportens 10 s-väg bär samma rader som reserv).
+    pub async fn new_logs(
+        &mut self,
+        docker: &Docker,
+        server_id: &str,
+        since: Option<&str>,
+    ) -> Result<(Vec<(String, String)>, Option<String>)> {
+        let lines = docker.logs_since(server_id, since).await?;
+
+        Ok(self.collect_new_lines(server_id, since, lines))
+    }
+
+    /// Rader efter cursorn, rensade och kapade till `LOG_WINDOW`. En join-rad
+    /// räknas även när den faller utanför fönstret — spelarräkningen är en
+    /// händelsesumma, inte ett urval av de rader som skickas.
+    fn collect_new_lines(
+        &mut self,
+        server_id: &str,
+        since: Option<&str>,
+        lines: Vec<(String, String)>,
+    ) -> (Vec<(String, String)>, Option<String>) {
+        let mut cursor = since.map(str::to_string);
+        let mut logs = Vec::new();
+        for (ts, text) in lines {
+            // Docker `--since` är inkluderande: gränsraden har redan skickats.
+            if !is_new(cursor.as_deref(), &ts) {
+                continue;
+            }
+            cursor = Some(ts.clone());
+            let text = sanitize(&text);
+            if text.is_empty() {
+                continue;
+            }
+            self.apply_player_event(server_id, &text);
+            logs.push((ts, text));
+        }
+        if logs.len() > LOG_WINDOW {
+            logs.drain(..logs.len() - LOG_WINDOW);
+        }
+
+        (logs, cursor)
     }
 
     async fn disk_usage(&mut self, server_id: &str, root: &Path) -> Option<u64> {
@@ -380,6 +412,63 @@ mod tests {
         let mut reporter = Reporter::new();
         reporter.apply_player_event("srv", "Starting minecraft server version 1.21");
         assert_eq!(reporter.players.get("srv").copied(), None);
+    }
+
+    #[test]
+    fn collects_new_lines_after_the_cursor_and_counts_the_joins() {
+        let mut reporter = Reporter::new();
+        let lines = vec![
+            ("2026-11-25T10:00:00Z".to_string(), "old line".to_string()),
+            (
+                "2026-11-25T10:00:01Z".to_string(),
+                "Steve joined the game".to_string(),
+            ),
+            (
+                "2026-11-25T10:00:02Z".to_string(),
+                "  padded\u{0}".to_string(),
+            ),
+        ];
+
+        let (logs, cursor) = reporter.collect_new_lines("srv", Some("2026-11-25T10:00:00Z"), lines);
+
+        assert_eq!(cursor.as_deref(), Some("2026-11-25T10:00:02Z"));
+        assert_eq!(
+            logs,
+            vec![
+                (
+                    "2026-11-25T10:00:01Z".to_string(),
+                    "Steve joined the game".to_string()
+                ),
+                ("2026-11-25T10:00:02Z".to_string(), "  padded".to_string()),
+            ]
+        );
+        assert_eq!(reporter.players.get("srv").copied(), Some(1));
+    }
+
+    #[test]
+    fn a_busy_server_is_capped_to_the_log_window_but_every_join_is_counted() {
+        let mut reporter = Reporter::new();
+        let mut lines = Vec::new();
+
+        for index in 0..(LOG_WINDOW + 5) {
+            let text = if index == 0 {
+                "Alex joined the game".to_string()
+            } else {
+                format!("rad {index}")
+            };
+            // Strikt stigande tider: en upprepad stämpel är inte en ny rad.
+            lines.push((
+                format!("2026-11-25T10:{:02}:{:02}Z", index / 60, index % 60),
+                text,
+            ));
+        }
+
+        let (logs, _) = reporter.collect_new_lines("srv", None, lines);
+
+        assert_eq!(logs.len(), LOG_WINDOW);
+        // Första raden föll utanför fönstret men joinen räknades ändå.
+        assert_eq!(logs.first().map(|(_, text)| text.as_str()), Some("rad 5"));
+        assert_eq!(reporter.players.get("srv").copied(), Some(1));
     }
 
     #[test]

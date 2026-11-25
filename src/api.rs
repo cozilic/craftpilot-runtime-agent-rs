@@ -416,6 +416,24 @@ impl MasterClient {
         .await
     }
 
+    /// Nya konsolrader direkt till mastern (2026-11-25): samma rader som
+    /// rapporten bär, men skickade sekunden de dyker upp. Mastern broadcastar
+    /// dem till panelen utan att röra rapportens mått.
+    pub async fn report_console_lines(
+        &self,
+        node_id: &str,
+        server_id: &str,
+        report: &Value,
+    ) -> Result<Value> {
+        self.request(
+            Method::POST,
+            &format!("api/runtime/nodes/{node_id}/servers/{server_id}/logs"),
+            Some(report),
+            true,
+        )
+        .await
+    }
+
     /// En statusrapport per server; `sequence` måste vara strikt ökande.
     pub async fn report_server(&self, node_id: &str, report: &Value) -> Result<Value> {
         self.request(
