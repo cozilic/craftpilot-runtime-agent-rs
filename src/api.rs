@@ -1,3 +1,4 @@
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use reqwest::{Client, Method, StatusCode};
@@ -16,12 +17,16 @@ use crate::sftpgo::{SftpSecret, SftpSecrets, SftpState, SftpStatusReport};
 /// Tunn klient mot masterns `/api/runtime/...`-endpoints. Inga redirects
 /// följs (samma regel som Python-agenten), och credentialen skickas bara
 /// som bearer när anropet är autentiserat.
+/// Klonbar: push-loopen håller en egen kopia och läser alltid den SENASTE
+/// credentialen. En omregistrering (som byter credential i samma process)
+/// ska inte kräva att pushen startas om.
+#[derive(Clone)]
 pub struct MasterClient {
     http: Client,
     /// Nedladdningar strömmas: ingen total timeout, bara en anslutningstimeout.
     stream_http: Client,
     base: Url,
-    credential: Option<String>,
+    credential: Arc<RwLock<Option<String>>>,
 }
 
 impl MasterClient {
@@ -48,12 +53,24 @@ impl MasterClient {
             http,
             stream_http,
             base,
-            credential: None,
+            credential: Arc::new(RwLock::new(None)),
         })
     }
 
     pub fn set_credential(&mut self, credential: Option<String>) {
-        self.credential = credential;
+        if let Ok(mut guard) = self.credential.write() {
+            *guard = credential;
+        }
+    }
+
+    /// En kopia av credentialen. Låset hålls bara över klonen, aldrig över
+    /// ett anrop.
+    fn credential(&self) -> Result<String> {
+        self.credential
+            .read()
+            .map_err(|_| AgentError::Config("the agent credential lock is poisoned".into()))?
+            .clone()
+            .ok_or(AgentError::Unauthorized)
     }
 
     fn url(&self, path: &str) -> Result<Url> {
@@ -79,7 +96,7 @@ impl MasterClient {
             .header("Accept", "application/json");
 
         if authenticated {
-            let credential = self.credential.as_deref().ok_or(AgentError::Unauthorized)?;
+            let credential = self.credential()?;
             request = request.bearer_auth(credential);
         }
         if let Some(body) = body {
@@ -106,7 +123,7 @@ impl MasterClient {
     where
         B: serde::Serialize + ?Sized,
     {
-        let credential = self.credential.as_deref().ok_or(AgentError::Unauthorized)?;
+        let credential = self.credential()?;
         let mut request = self
             .http
             .request(method, self.url(path)?)
@@ -267,10 +284,37 @@ impl MasterClient {
         .await
     }
 
+    /// Signerar agentens prenumeration på sin egen nodkanal (2026-11-25).
+    /// Mastern svarar `{auth}`; `404` betyder att pushen är avstängd och
+    /// `401` att credentialen inte längre gäller. Båda stänger bara
+    /// push-loopen — kommandoloopet pollar vidare.
+    pub async fn broadcast_auth(
+        &self,
+        node_id: &str,
+        channel: &str,
+        socket_id: &str,
+    ) -> Result<String> {
+        let body = serde_json::json!({ "socket_id": socket_id, "channel_name": channel });
+        let response: Value = self
+            .request(
+                Method::POST,
+                &format!("api/runtime/nodes/{node_id}/broadcasting/auth"),
+                Some(&body),
+                true,
+            )
+            .await?;
+
+        response
+            .get("auth")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .ok_or_else(|| AgentError::Config("the master returned no push signature".into()))
+    }
+
     /// Hämtar en snapshot med nodens credential. Redirects följs aldrig,
     /// så en 302 kan inte flytta nedladdningen till en annan värd.
     pub async fn download(&self, url: &Url) -> Result<reqwest::Response> {
-        let credential = self.credential.as_deref().ok_or(AgentError::Unauthorized)?;
+        let credential = self.credential()?;
         let response = self
             .http
             .get(url.clone())
@@ -413,7 +457,7 @@ impl MasterClient {
         path: &std::path::Path,
         bytes: u64,
     ) -> Result<Value> {
-        let credential = self.credential.as_deref().ok_or(AgentError::Unauthorized)?;
+        let credential = self.credential()?;
         let file = tokio::fs::File::open(path).await?;
         let body = reqwest::Body::wrap_stream(tokio_util::io::ReaderStream::new(file));
         let response = self
@@ -439,7 +483,7 @@ impl MasterClient {
         command_id: &str,
         lease_token: &str,
     ) -> Result<reqwest::Response> {
-        let credential = self.credential.as_deref().ok_or(AgentError::Unauthorized)?;
+        let credential = self.credential()?;
         let response = self
             .http
             .get(self.url(&format!(
@@ -471,7 +515,7 @@ impl MasterClient {
         command_id: &str,
         lease_token: &str,
     ) -> Result<reqwest::Response> {
-        let credential = self.credential.as_deref().ok_or(AgentError::Unauthorized)?;
+        let credential = self.credential()?;
         let response = self
             .http
             .get(self.url(&format!(
@@ -504,7 +548,7 @@ impl MasterClient {
         lease_token: &str,
         manifest: &Value,
     ) -> Result<Value> {
-        let credential = self.credential.as_deref().ok_or(AgentError::Unauthorized)?;
+        let credential = self.credential()?;
         let response = self
             .http
             .put(self.url(&format!(
@@ -528,7 +572,7 @@ impl MasterClient {
         index: u64,
         chunk: &[u8],
     ) -> Result<Value> {
-        let credential = self.credential.as_deref().ok_or(AgentError::Unauthorized)?;
+        let credential = self.credential()?;
         let response = self
             .http
             .put(self.url(&format!(
@@ -551,7 +595,7 @@ impl MasterClient {
         command_id: &str,
         lease_token: &str,
     ) -> Result<Value> {
-        let credential = self.credential.as_deref().ok_or(AgentError::Unauthorized)?;
+        let credential = self.credential()?;
         let response = self
             .http
             .get(self.url(&format!(
@@ -573,7 +617,7 @@ impl MasterClient {
         lease_token: &str,
         index: u64,
     ) -> Result<Vec<u8>> {
-        let credential = self.credential.as_deref().ok_or(AgentError::Unauthorized)?;
+        let credential = self.credential()?;
         let response = self
             .http
             .get(self.url(&format!(

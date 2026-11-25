@@ -10,6 +10,7 @@ mod files;
 mod migrations;
 mod model;
 mod ping;
+mod push;
 mod rcon;
 mod sftp;
 mod sftpgo;
