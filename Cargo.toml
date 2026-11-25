@@ -1,6 +1,6 @@
 [package]
 name = "craftpilot-runtime-agent"
-version = "0.14.0"
+version = "0.15.0"
 edition = "2021"
 rust-version = "1.88"
 description = "Rust runtime agent for CraftPilot (same HTTP contract as the Python agent)"
@@ -27,6 +27,9 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 notify = "8"
 futures-util = "0.3"
 bollard = "0.21.1"
+# Push-kanal (2026-11-25): agenten prenumererar på nodens egen Reverb-kanal
+# i stället för att bara polla. Samma rustls-rötter som reqwest använder.
+tokio-tungstenite = { version = "0.24", default-features = false, features = ["connect", "rustls-tls-native-roots"] }
 
 [profile.release]
 strip = true

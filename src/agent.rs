@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use tokio::time::sleep;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use crate::api::MasterClient;
 use crate::config::Config;
@@ -15,7 +15,8 @@ use crate::error::{AgentError, Result};
 use crate::file_tree::{FileTreeIndex, SYNC_BATCH};
 use crate::files::Files;
 use crate::migrations::Migrations;
-use crate::model::{AckRequest, Command, NodeCapabilities};
+use crate::model::{AckRequest, Command, NodeCapabilities, RealtimeConfig};
+use crate::push;
 use crate::rcon;
 use crate::sftp::SftpService;
 use crate::snapshot::Snapshotter;
@@ -54,6 +55,12 @@ pub struct Agent {
     assigned_servers: BTreeSet<String>,
     last_file_tree_progress: Option<String>,
     started_at: Instant,
+    /// Push-signalen från nodens Reverb-kanal: väcker kommandoloopet så att
+    /// ett nyköat kommando claimas direkt i stället för vid nästa poll.
+    wake: Arc<tokio::sync::Notify>,
+    /// Push-loopen. `None` tills mastern skickat en `realtime`-instruktion.
+    push: Option<tokio::task::JoinHandle<()>>,
+    push_url: Option<String>,
 }
 
 impl Agent {
@@ -107,6 +114,9 @@ impl Agent {
             assigned_servers: BTreeSet::new(),
             last_file_tree_progress: None,
             started_at: Instant::now(),
+            wake: Arc::new(tokio::sync::Notify::new()),
+            push: None,
+            push_url: None,
         })
     }
 
@@ -497,6 +507,9 @@ impl Agent {
 
     async fn main_loop(&mut self) -> Result<()> {
         let poll = Duration::from_secs(self.cfg.poll_seconds);
+        // Egen klon: `select!` håller framtiden lånad medan armen kör, och
+        // `tick` behöver `&mut self`.
+        let wake = Arc::clone(&self.wake);
 
         loop {
             tokio::select! {
@@ -505,26 +518,44 @@ impl Agent {
                     info!("shutdown requested");
                     return Ok(());
                 }
-                _ = sleep(poll) => {
-                    if let Err(err) = self.tick().await {
-                        if needs_new_credential(&err) {
-                            warn!("the master rejected the credential — filing a replacement enrollment request");
-                            self.forget_credential()?;
-                            match self.self_enroll().await {
-                                Ok(()) => {}
-                                Err(AgentError::EnrollmentRejected) => warn!(
-                                    "the sysadmin rejected the replacement enrollment request; not filing another one"
-                                ),
-                                Err(enroll_err) => {
-                                    warn!(error = %enroll_err, "re-enrollment failed; retrying on the next poll");
-                                }
-                            }
-                        } else {
-                            warn!(error = %err, "poll failed");
-                        }
-                    }
+                _ = sleep(poll) => self.tick_with_recovery().await,
+                _ = wake.notified() => {
+                    // Ett kommando har köats på mastern: claima nu i stället
+                    // för att vänta ut poll-intervallet. Pollningen finns
+                    // kvar som garanti, så en tappad signal kostar bara en
+                    // fördröjning — aldrig ett kommando.
+                    debug!("wake received from the push channel");
+                    self.tick_with_recovery().await;
                 }
             }
+        }
+    }
+
+    /// Ett varv med samma återhämtning som förut: en avvisad credential
+    /// leder till en ny anmälan, allt annat loggas och nästa varv försöker
+    /// igen.
+    async fn tick_with_recovery(&mut self) {
+        let Err(err) = self.tick().await else {
+            return;
+        };
+
+        if needs_new_credential(&err) {
+            warn!("the master rejected the credential — filing a replacement enrollment request");
+            if let Err(forget_err) = self.forget_credential() {
+                warn!(error = %forget_err, "could not clear the rejected credential");
+                return;
+            }
+            match self.self_enroll().await {
+                Ok(()) => {}
+                Err(AgentError::EnrollmentRejected) => warn!(
+                    "the sysadmin rejected the replacement enrollment request; not filing another one"
+                ),
+                Err(enroll_err) => {
+                    warn!(error = %enroll_err, "re-enrollment failed; retrying on the next poll");
+                }
+            }
+        } else {
+            warn!(error = %err, "poll failed");
         }
     }
 
@@ -571,6 +602,12 @@ impl Agent {
         // namnet i nästa svar utan att startas om.
         if let Some(settings) = claim.node_settings.as_ref() {
             self.remember_node_name(&settings.name)?;
+        }
+
+        // Push-instruktionen följer med varje claim, så en redan installerad
+        // nod börjar använda Reverb utan nya miljövariabler (2026-11-25).
+        if let Some(realtime) = claim.realtime.clone() {
+            self.ensure_push(realtime, &node_id);
         }
 
         // Telemetrin hör inte till kommandokön: den måste skickas även när
@@ -649,6 +686,28 @@ impl Agent {
         self.refresh_sftp().await;
 
         Ok(())
+    }
+
+    /// Startar push-loopen första gången mastern säger var noden ska
+    /// prenumerera. Samma URL startar den inte om; en ny URL (mastern har
+    /// flyttats) ersätter den gamla. En misslyckad anslutning dödar aldrig
+    /// agenten — loopen backar av och pollningen fortsätter oberoende.
+    fn ensure_push(&mut self, cfg: RealtimeConfig, node_id: &str) {
+        if self.push.is_some() && self.push_url.as_deref() == Some(cfg.url.as_str()) {
+            return;
+        }
+
+        if let Some(handle) = self.push.take() {
+            handle.abort();
+        }
+
+        self.push_url = Some(cfg.url.clone());
+        self.push = Some(tokio::spawn(push::run(
+            cfg,
+            node_id.to_string(),
+            self.api.clone(),
+            Arc::clone(&self.wake),
+        )));
     }
 
     /// Nästa kommando i kön, samma väg som huvudvarvet använder: samma

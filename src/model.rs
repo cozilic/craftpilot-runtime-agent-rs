@@ -81,6 +81,20 @@ pub struct ClaimResponse {
     pub command: Option<Command>,
     #[serde(default)]
     pub node_settings: Option<NodeSettings>,
+    /// Var noden ska prenumerera för att väckas när kön får ett kommando
+    /// (2026-11-25). `None` betyder att push är avstängd på mastern — då
+    /// pollar agenten som vanligt.
+    #[serde(default)]
+    pub realtime: Option<RealtimeConfig>,
+}
+
+/// Masterns push-instruktion: Reverbs `/app/<key>`-URL och nodens privata
+/// kanal. Allt agenten behöver för att prenumerera; signeringen hämtas med
+/// nodens credential.
+#[derive(Debug, Clone, Deserialize)]
+pub struct RealtimeConfig {
+    pub url: String,
+    pub channel: String,
 }
 
 #[derive(Debug, Deserialize)]
