@@ -1286,7 +1286,7 @@ impl Agent {
             return NodeCapabilities::default();
         };
 
-        match sftp.refresh(&node_id, &self.api).await {
+        match sftp.refresh(&node_id, &self.api, &mut self.store).await {
             Ok(()) => sftp.capabilities(),
             Err(err) => {
                 warn!(error = %err, "node sftp is unavailable");

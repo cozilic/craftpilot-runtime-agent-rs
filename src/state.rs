@@ -48,6 +48,23 @@ pub struct AgentState {
     /// enda väg in i SFTPGo:s admin-API och aldrig en användarhemlighet.
     #[serde(default)]
     pub sftp_admin_password: Option<String>,
+    /// Vad nodens SFTPGo faktiskt har per konto: masterns revision som
+    /// applicerades och om kontot har ett lösenord. Bara metadata —
+    /// användarlösenordet skrivs aldrig hit.
+    #[serde(default)]
+    pub sftp_passwords: BTreeMap<String, SftpPasswordState>,
+}
+
+/// Ett kontos lösenordsläge på noden. `revision` är masterns nummer för det
+/// senaste agenten applicerade; `has_password` skiljer "mastern har aldrig
+/// satt något" från "agenten rensade det nyss". Själva lösenordet lagras
+/// aldrig här, så en omstart kan fortsätta utan att fråga mastern igen.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SftpPasswordState {
+    #[serde(default)]
+    pub revision: u64,
+    #[serde(default)]
+    pub has_password: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -110,6 +127,10 @@ impl StateStore {
 
     pub fn log_cursor(&self, server_id: &str) -> Option<&str> {
         self.state.log_cursors.get(server_id).map(String::as_str)
+    }
+
+    pub fn sftp_passwords(&self) -> &BTreeMap<String, SftpPasswordState> {
+        &self.state.sftp_passwords
     }
 
     /// Sparar kursorn direkt: en krasch efter rapporten får inte leda till

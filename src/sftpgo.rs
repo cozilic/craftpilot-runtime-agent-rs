@@ -6,9 +6,10 @@
 //! får aldrig hitta på ett konto eller en mapp själv — den bygger bara
 //! sökvägen ur `server_id` och vägrar allt som inte ligger under data-roten.
 //!
-//! Inga lösenord hanteras här (lösenordskanalen är en separat, avstängd
-//! funktion i mastern): ett konto utan minst en publik nyckel skapas aldrig,
-//! eftersom SFTPGo annars skulle få ett konto helt utan autentiseringsmetod.
+//! Inga lösenord lagras här: lösenordskanalen (`sftp-password`) levererar en
+//! klartext som bara finns i minnet under en apply-omgång. Ett konto utan
+//! minst en publik nyckel skapas aldrig utan ett applicerat lösenord, eftersom
+//! SFTPGo annars skulle få ett konto helt utan autentiseringsmetod.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -45,8 +46,12 @@ pub struct SftpUser {
     pub username: String,
     #[serde(default)]
     pub public_keys: Vec<String>,
-    /// `enabled` och `password_*` läses inte: agenten skapar aldrig ett
-    /// konto utan nyckel, och lösenordskanalen är inte implementerad.
+    /// Masterns sanning om lösenordet. En revision som är nyare än nodens
+    /// egen gör att agenten hämtar hemligheten en gång och applicerar den.
+    #[serde(default)]
+    pub password_set: bool,
+    #[serde(default)]
+    pub password_revision: u64,
     #[serde(default)]
     pub folders: Vec<SftpFolder>,
 }
@@ -56,6 +61,40 @@ pub struct SftpState {
     pub revision: String,
     #[serde(default)]
     pub users: Vec<SftpUser>,
+}
+
+/// En engångshemlighet från `POST …/sftp/secrets`. Klartexten får bara leva i
+/// minnet mellan hämtningen och det PUT/POST som applicerar den.
+#[derive(Debug, Clone, Deserialize)]
+pub struct SftpSecret {
+    pub username: String,
+    pub password: String,
+    pub revision: u64,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct SftpSecrets {
+    #[serde(default)]
+    pub secrets: Vec<SftpSecret>,
+}
+
+/// Vad en apply-omgång ska göra med ett kontos lösenord.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PasswordIntent {
+    /// Sätt det här lösenordet (klartext, endast i minnet).
+    Set(String),
+    /// Kontot har redan lösenordet; `password` utelämnas så hashen består.
+    Keep,
+    /// Ta bort lösenordet (`password: ""`), så kontot blir nyckelbaserat.
+    Clear,
+}
+
+/// En kvittenspost till `POST …/sftp/status`: vilken revision nodens SFTPGo
+/// faktiskt har (0 = inget lösenord). Aldrig lösenordet.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct SftpStatusReport {
+    pub username: String,
+    pub password_revision: u64,
 }
 
 /// Konfiguration för en apply-omgång. Hålls utanför `Config` så testerna
@@ -74,6 +113,8 @@ pub struct ApplyOutcome {
     /// Servrar vars katalog saknas (eller inte är en riktig katalog under
     /// data-roten) och därför inte mappades.
     pub skipped_folders: usize,
+    /// Konton där en lösenordsavsikt faktiskt skrevs (alltså inte `Keep`).
+    pub password_users: BTreeSet<String>,
 }
 
 /// Klient mot SFTPGo:s admin-API. Alla anrop går över det interna
@@ -113,10 +154,26 @@ impl SftpGoClient {
 
     /// Skapar/uppdaterar mappar och konton så att SFTPGo speglar state.
     /// Idempotent: andra körningen med samma revision skriver ingenting.
+    /// Bara testerna anropar den utan lösenordsavsikter; produktionsvägen går
+    /// alltid via `apply_with_passwords`.
+    #[cfg(test)]
     pub async fn apply(
         &mut self,
         state: &SftpState,
         cfg: &ApplyConfig<'_>,
+    ) -> Result<ApplyOutcome> {
+        self.apply_with_passwords(state, cfg, &BTreeMap::new())
+            .await
+    }
+
+    /// Samma synk, men med de lösenordsavsikter noden räknat ut. Klartexten
+    /// finns bara i `passwords` under anropet: den skrivs aldrig till state,
+    /// logg eller ett svar tillbaka till mastern.
+    pub async fn apply_with_passwords(
+        &mut self,
+        state: &SftpState,
+        cfg: &ApplyConfig<'_>,
+        passwords: &BTreeMap<String, PasswordIntent>,
     ) -> Result<ApplyOutcome> {
         // 1. Vilka mappar vill mastern ha? En server vars katalog saknas
         //    mappas aldrig — annars skulle SFTPGo peka på en tom sökväg.
@@ -150,6 +207,7 @@ impl SftpGoClient {
         //    jämförelsen ser nycklar och virtual folders som de faktiskt är.
         let existing_users = self.list_usernames().await?;
         let mut desired_users = BTreeSet::new();
+        let mut password_users = BTreeSet::new();
 
         for user in &state.users {
             if !managed_username(&user.username) {
@@ -183,21 +241,47 @@ impl SftpGoClient {
             }
             let (file_uid, file_gid) = effective_owner(cfg.file_uid, cfg.file_gid, derived_owner);
 
-            let Some(payload) = desired_user(
+            let intent = passwords.get(&user.username);
+            // Lösenordet räknas som autentiseringsmetod: ett konto med bara
+            // lösenord får finnas, ett konto utan båda får inte.
+            let has_password = !matches!(intent, None | Some(PasswordIntent::Clear));
+            let Some(mut payload) = desired_user(
                 &user.username,
                 &user.public_keys,
                 &pairs,
                 file_uid,
                 file_gid,
+                has_password,
             ) else {
-                // Inga giltiga nycklar (eller inga mappar): inget konto.
-                // Ett befintligt konto tas bort i städningen nedan.
+                // Varken giltig nyckel eller lösenord (eller inga mappar):
+                // inget konto. Ett befintligt konto tas bort i städningen.
+                // Ett rensat lösenord är ändå applicerat när kontot försvinner.
+                if matches!(intent, Some(PasswordIntent::Clear)) {
+                    password_users.insert(user.username.clone());
+                }
                 continue;
+            };
+            let password_changed = match intent {
+                Some(PasswordIntent::Set(password)) => {
+                    payload["password"] = json!(password);
+                    true
+                }
+                Some(PasswordIntent::Clear) => {
+                    // Tom sträng rensar hashen i SFTPGo.
+                    payload["password"] = json!("");
+                    true
+                }
+                _ => false,
             };
 
             desired_users.insert(user.username.clone());
+            if password_changed {
+                password_users.insert(user.username.clone());
+            }
             match self.get_user(&user.username).await? {
-                Some(current) if user_matches(&current, &payload) => {}
+                // En lösenordsändring måste skrivas även när kontot annars är
+                // identiskt, och en `Keep` får aldrig skicka `password`.
+                Some(current) if !password_changed && user_matches(&current, &payload) => {}
                 Some(current) => {
                     // SFTPGo behåller en öppen sessions inställningar, så en ny
                     // mapp kräver att sessionerna stängs. Nycklar och ägare får
@@ -229,6 +313,7 @@ impl SftpGoClient {
             users: desired_users.len(),
             folders: folders.len(),
             skipped_folders,
+            password_users,
         })
     }
 
@@ -463,7 +548,7 @@ fn summarize(raw: &str) -> String {
 
 /// Bara `<username>` som redan är `u<id>` får bli en sökväg. Mastern
 /// genererar dem, men klienten litar inte på det.
-fn managed_username(username: &str) -> bool {
+pub(crate) fn managed_username(username: &str) -> bool {
     let Some(rest) = username.strip_prefix('u') else {
         return false;
     };
@@ -492,14 +577,17 @@ fn valid_public_key(key: &str) -> bool {
 }
 
 /// `u42` → `{status, username, home_dir, public_keys, permissions,
-/// virtual_folders, uid, gid}`. `None` när kontot inte får finnas: utan en
-/// giltig nyckel finns ingen autentiseringsmetod.
+/// virtual_folders, uid, gid}`. `None` när kontot inte får finnas: ett konto
+/// kräver minst en autentiseringsmetod, alltså en giltig nyckel eller ett
+/// lösenord som redan är (eller strax blir) applicerat. Lösenordet läggs
+/// aldrig i det här objektet — det gör `apply_with_passwords`.
 pub fn desired_user(
     username: &str,
     public_keys: &[String],
     folders: &[(String, String)],
     file_uid: u32,
     file_gid: u32,
+    has_password: bool,
 ) -> Option<Value> {
     if !managed_username(username) {
         return None;
@@ -512,7 +600,7 @@ pub fn desired_user(
         .filter(|key| valid_public_key(key))
         .filter(|key| seen_keys.insert(key.clone()))
         .collect();
-    if keys.is_empty() {
+    if keys.is_empty() && !has_password {
         return None;
     }
 
@@ -548,8 +636,9 @@ pub fn desired_user(
     }))
 }
 
-/// Jämför det som agenten äger. `password` finns aldrig med (kanalen är av),
-/// så en PUT kan aldrig råka släcka ett lösenord som mastern inte känner till.
+/// Jämför det agenten äger. `password` jämförs aldrig: hashen kan inte läsas
+/// tillbaka, så en `Keep` utelämnar fältet och en ändring tvingas igenom
+/// separat av `apply_with_passwords`.
 fn user_matches(existing: &Value, desired: &Value) -> bool {
     let keys = |value: &Value| -> BTreeSet<String> {
         value
@@ -824,16 +913,34 @@ mod tests {
     #[test]
     fn a_user_without_keys_is_never_created() {
         let folders = vec![("myserver-ab12cd".to_string(), format!("/mount/{SERVER_ID}"))];
-        assert!(desired_user("u42", &[], &folders, 33, 33).is_none());
-        assert!(desired_user("u42", &["garbage".to_string()], &folders, 33, 33).is_none());
-        assert!(desired_user("u42", &["ssh-ed25519 AAAA x".to_string()], &[], 33, 33).is_none());
+        assert!(desired_user("u42", &[], &folders, 33, 33, false).is_none());
+        assert!(desired_user("u42", &["garbage".to_string()], &folders, 33, 33, false).is_none());
+        assert!(desired_user(
+            "u42",
+            &["ssh-ed25519 AAAA x".to_string()],
+            &[],
+            33,
+            33,
+            false
+        )
+        .is_none());
+        // Ett lösenord är också en autentiseringsmetod, men kontot kräver en mapp.
+        assert!(desired_user("u42", &[], &folders, 33, 33, true).is_some());
+        assert!(desired_user("u42", &[], &[], 33, 33, true).is_none());
     }
 
     #[test]
     fn desired_user_maps_each_folder_at_its_slug_without_a_password() {
         let folders = vec![("myserver-ab12cd".to_string(), format!("/mount/{SERVER_ID}"))];
-        let payload =
-            desired_user("u42", &["ssh-ed25519 AAAA x".to_string()], &folders, 33, 44).unwrap();
+        let payload = desired_user(
+            "u42",
+            &["ssh-ed25519 AAAA x".to_string()],
+            &folders,
+            33,
+            44,
+            false,
+        )
+        .unwrap();
 
         assert_eq!(payload["username"], "u42");
         assert_eq!(payload["uid"], 33);
@@ -1247,6 +1354,89 @@ mod tests {
                 .any(|request| request.contains("disconnect=1")),
             "{requests:?}"
         );
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_password_only_account_is_created_and_removed_when_it_has_no_auth_method() {
+        let root = temp_dir("password");
+        std::fs::create_dir_all(root.join(SERVER_ID)).unwrap();
+        let server = MockSftpGo::start().await;
+        let mut client = server.client().await;
+        let cfg = ApplyConfig {
+            data_root: &root,
+            file_uid: None,
+            file_gid: None,
+        };
+        let state = state(vec![user("u42", false, true)]);
+
+        let mut passwords = BTreeMap::new();
+        passwords.insert(
+            "u42".to_string(),
+            PasswordIntent::Set("hunter2".to_string()),
+        );
+        client
+            .apply_with_passwords(&state, &cfg, &passwords)
+            .await
+            .unwrap();
+
+        let stored = server.user("u42").unwrap();
+        assert_eq!(stored["password"], "hunter2");
+        assert_eq!(stored["public_keys"].as_array().unwrap().len(), 0);
+
+        // Rensat lösenord utan nyckel: ingen autentiseringsmetod kvar.
+        let mut passwords = BTreeMap::new();
+        passwords.insert("u42".to_string(), PasswordIntent::Clear);
+        client
+            .apply_with_passwords(&state, &cfg, &passwords)
+            .await
+            .unwrap();
+        assert!(server.user("u42").is_none());
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn an_applied_password_is_never_resent() {
+        let root = temp_dir("keep");
+        std::fs::create_dir_all(root.join(SERVER_ID)).unwrap();
+        let server = MockSftpGo::start().await;
+        let mut client = server.client().await;
+        let cfg = ApplyConfig {
+            data_root: &root,
+            file_uid: None,
+            file_gid: None,
+        };
+        let state = state(vec![user("u42", true, true)]);
+
+        let mut passwords = BTreeMap::new();
+        passwords.insert(
+            "u42".to_string(),
+            PasswordIntent::Set("hunter2".to_string()),
+        );
+        let outcome = client
+            .apply_with_passwords(&state, &cfg, &passwords)
+            .await
+            .unwrap();
+        assert_eq!(outcome.password_users.len(), 1);
+
+        // `Keep` ska varken skriva om kontot eller skicka lösenordet igen.
+        server.clear_requests();
+        let mut passwords = BTreeMap::new();
+        passwords.insert("u42".to_string(), PasswordIntent::Keep);
+        client
+            .apply_with_passwords(&state, &cfg, &passwords)
+            .await
+            .unwrap();
+        let requests = server.requests();
+        assert!(
+            !requests
+                .iter()
+                .any(|request| request.starts_with("PUT /api/v2/users")),
+            "{requests:?}"
+        );
+        assert_eq!(server.user("u42").unwrap()["password"], "hunter2");
 
         std::fs::remove_dir_all(&root).unwrap();
     }

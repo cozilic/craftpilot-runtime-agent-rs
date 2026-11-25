@@ -11,19 +11,24 @@
 //! Admin-API:t publiceras aldrig på värden: agenten når det över samma
 //! Docker-nät som spelcontainrarna. Porten som publiceras är SFTP-porten.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::process::{Output, Stdio};
 use std::time::{Duration, Instant};
 
 use tokio::process::Command as ProcessCommand;
 use tokio::time::timeout;
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::api::MasterClient;
 use crate::config::Config;
 use crate::error::{AgentError, Result};
 use crate::model::NodeCapabilities;
-use crate::sftpgo::{host_key_fingerprint, ApplyConfig, SftpGoClient, CONTAINER_SERVERS_ROOT};
+use crate::sftpgo::{
+    host_key_fingerprint, managed_username, ApplyConfig, PasswordIntent, SftpGoClient, SftpSecret,
+    SftpState, SftpStatusReport, CONTAINER_SERVERS_ROOT,
+};
+use crate::state::{SftpPasswordState, StateStore};
 
 /// Hur ofta containerns tillstånd kontrolleras när den redan är frisk.
 /// Varje poll behöver inte kosta en `docker inspect`.
@@ -77,6 +82,11 @@ pub struct SftpService {
     applied_at: Option<Instant>,
     fingerprint: Option<String>,
     capabilities: NodeCapabilities,
+    /// Revisioner där hemligheten redan efterfrågats och inte fanns hos
+    /// mastern. Utan det skulle en utgången hemlighet frågas om varje poll och
+    /// äta upp endpointens budget (10/min). Revisionen är unik, så en post
+    /// behöver aldrig tas bort.
+    missing_secrets: BTreeMap<String, u64>,
 }
 
 impl SftpService {
@@ -118,6 +128,7 @@ impl SftpService {
             applied_at: None,
             fingerprint: None,
             capabilities: NodeCapabilities::default(),
+            missing_secrets: BTreeMap::new(),
         })
     }
 
@@ -144,7 +155,12 @@ impl SftpService {
 
     /// Ser till att containern kör, hämtar masterns state och applicerar det
     /// när revisionen ändrats (eller SFTPGo precis startats om).
-    pub async fn refresh(&mut self, node_id: &str, api: &MasterClient) -> Result<()> {
+    pub async fn refresh(
+        &mut self,
+        node_id: &str,
+        api: &MasterClient,
+        store: &mut StateStore,
+    ) -> Result<()> {
         let restarted = self.ensure_container().await?;
 
         let status = self.client.status().await?;
@@ -155,36 +171,96 @@ impl SftpService {
             .applied_at
             .is_none_or(|at| at.elapsed() >= APPLY_REFRESH_INTERVAL);
         if restarted || stale || self.applied_revision.as_deref() != Some(state.revision.as_str()) {
+            let local = store.sftp_passwords().clone();
+            let plan = self.password_plan(node_id, api, &state, &local).await?;
             let outcome = self
                 .client
-                .apply(
+                .apply_with_passwords(
                     &state,
                     &ApplyConfig {
                         data_root: &self.server_data_root,
                         file_uid: self.file_uid,
                         file_gid: self.file_gid,
                     },
+                    &plan.intents,
                 )
                 .await?;
-            // Bara antal loggas: användarnamn, nycklar och state är inte
-            // något som hör hemma i en publik logg (docs/RUNTIME-NODE-SFTP).
+            // Bara antal loggas: användarnamn, nycklar, lösenord och state är
+            // inget som hör hemma i en publik logg (docs/RUNTIME-NODE-SFTP).
             info!(
                 revision = %state.revision,
                 users = outcome.users,
                 folders = outcome.folders,
                 skipped_folders = outcome.skipped_folders,
+                passwords = outcome.password_users.len(),
                 "sftp state applied"
             );
+
+            // Bara metadata sparas (revision + om ett lösenord finns).
+            let (known, reports) =
+                password_receipt(&state, &plan.intents, &outcome.password_users, &local);
+            if !known.is_empty() {
+                for (username, value) in known {
+                    store.state_mut().sftp_passwords.insert(username, value);
+                }
+                store.save()?;
+            }
+            // Kvittensen omfattar varje konto i nodens state, inte bara de
+            // som ändrades: ett nyckelbaserat konto ska visa "inget lösenord"
+            // i panelen, inte "noden har aldrig rapporterat". Mastern tar
+            // emot högst 500 poster per anrop.
+            for chunk in reports.chunks(500) {
+                // En avvisad kvittens får inte stoppa SFTP-synken: mastern
+                // svarar 422 för ett konto som inte ingår i nodens state.
+                if let Err(err) = api.report_sftp_status(node_id, chunk).await {
+                    warn!(error = %err, "the sftp password receipt was rejected");
+                    break;
+                }
+            }
+
             self.applied_revision = Some(state.revision.clone());
             self.applied_at = Some(Instant::now());
         }
 
         self.capabilities = NodeCapabilities {
-            features: vec!["sftp".to_string()],
+            // Lösenordskanalen annonseras bara tillsammans med `sftp`, alltså
+            // bara när SFTPGo svarar och kan ta emot kontot.
+            features: vec!["sftp".to_string(), "sftp-password".to_string()],
             fingerprint: self.fingerprint.clone(),
             bound_port: self.bound_port,
         };
         Ok(())
+    }
+
+    /// Räknar ut lösenordsavsikterna och hämtar hemligheten **högst en gång**
+    /// per synk. Endpointen har budgeten 10/min, så en revision som redan
+    /// försökts utan resultat hoppas över tills den ändras igen.
+    async fn password_plan(
+        &mut self,
+        node_id: &str,
+        api: &MasterClient,
+        state: &SftpState,
+        local: &BTreeMap<String, SftpPasswordState>,
+    ) -> Result<PasswordPlan> {
+        let plan = password_plan(state, local, &[], &self.missing_secrets);
+        if plan.fetch.is_empty() {
+            return Ok(plan);
+        }
+
+        let secrets = api.sftp_secrets(node_id).await?;
+        for (username, revision) in &plan.fetch {
+            let delivered = secrets
+                .iter()
+                .any(|secret| secret.username == *username && secret.revision == *revision);
+            if !delivered {
+                // Utgången hemlighet (noden var offline över TTL): kontot
+                // lämnas nyckelbaserat och revisionen kvitteras inte, så
+                // panelen kan be användaren ange lösenordet igen.
+                self.missing_secrets.insert(username.clone(), *revision);
+            }
+        }
+
+        Ok(password_plan(state, local, &secrets, &self.missing_secrets))
     }
 
     /// `true` när containern skapades eller startades om — då måste state
@@ -608,6 +684,119 @@ pub fn generate_admin_password() -> String {
     crate::rcon::generate_password()
 }
 
+/// Vad en synk behöver göra med lösenorden: en avsikt per konto och de
+/// revisioner vars hemlighet måste hämtas från mastern.
+#[derive(Debug, Default)]
+struct PasswordPlan {
+    intents: BTreeMap<String, PasswordIntent>,
+    fetch: Vec<(String, u64)>,
+}
+
+/// Ren planläggning, så reglerna kan testas utan master och SFTPGo. `secrets`
+/// är tom innan hämtningen; `attempted` är de revisioner som redan efterfrågats
+/// utan resultat.
+fn password_plan(
+    state: &SftpState,
+    local: &BTreeMap<String, SftpPasswordState>,
+    secrets: &[SftpSecret],
+    attempted: &BTreeMap<String, u64>,
+) -> PasswordPlan {
+    let mut plan = PasswordPlan::default();
+
+    for user in &state.users {
+        if !managed_username(&user.username) {
+            continue;
+        }
+        let current = local.get(&user.username).copied().unwrap_or_default();
+
+        if current.revision == user.password_revision {
+            if current.has_password {
+                // Applicerat: PUT ska utelämna `password` så hashen består.
+                plan.intents
+                    .insert(user.username.clone(), PasswordIntent::Keep);
+            }
+            continue;
+        }
+
+        if !user.password_set {
+            // Rensat: kräver ingen hemlighet.
+            plan.intents
+                .insert(user.username.clone(), PasswordIntent::Clear);
+            continue;
+        }
+
+        if let Some(secret) = secrets.iter().find(|secret| {
+            secret.username == user.username && secret.revision == user.password_revision
+        }) {
+            plan.intents.insert(
+                user.username.clone(),
+                PasswordIntent::Set(secret.password.clone()),
+            );
+            continue;
+        }
+
+        if attempted.get(&user.username) != Some(&user.password_revision) {
+            plan.fetch
+                .push((user.username.clone(), user.password_revision));
+        }
+        if current.has_password {
+            // Hemligheten är borta (TTL) eller aldrig hämtad: kontot behåller
+            // nycklarna, men aldrig ett lösenord mastern inte känner till.
+            plan.intents
+                .insert(user.username.clone(), PasswordIntent::Clear);
+        }
+    }
+
+    plan
+}
+
+/// Det nya lokala läget och kvittensen. Det lokala läget ändras bara för ett
+/// konto vars avsikt faktiskt skrevs (utan ett lyckat skriv ska revisionen
+/// inte räknas som klar). Kvittensen omfattar däremot **varje** konto i nodens
+/// state: ett nyckelbaserat konto ska kvitteras med revision 0 så panelen ser
+/// "inget lösenord" i stället för "noden har aldrig rapporterat".
+fn password_receipt(
+    state: &SftpState,
+    intents: &BTreeMap<String, PasswordIntent>,
+    applied: &BTreeSet<String>,
+    local: &BTreeMap<String, SftpPasswordState>,
+) -> (BTreeMap<String, SftpPasswordState>, Vec<SftpStatusReport>) {
+    let mut known = BTreeMap::new();
+    let mut reports = Vec::new();
+
+    for user in &state.users {
+        if !managed_username(&user.username) {
+            continue;
+        }
+
+        let intent = intents.get(&user.username);
+        let entry = if applied.contains(&user.username) && intent.is_some() {
+            let has_password = matches!(intent, Some(PasswordIntent::Set(_)));
+            let value = SftpPasswordState {
+                revision: user.password_revision,
+                has_password,
+            };
+            known.insert(user.username.clone(), value);
+            value
+        } else {
+            // Oförändrat konto: det lokala läget är det som gäller.
+            local.get(&user.username).copied().unwrap_or_default()
+        };
+
+        reports.push(SftpStatusReport {
+            username: user.username.clone(),
+            // 0 = inget lösenord, enligt kontraktet.
+            password_revision: if entry.has_password {
+                entry.revision
+            } else {
+                0
+            },
+        });
+    }
+
+    (known, reports)
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
@@ -616,6 +805,7 @@ mod tests {
 
     use super::*;
     use crate::config::{Config, SftpSettings, DEFAULT_SFTP_IMAGE};
+    use crate::sftpgo::SftpUser;
 
     fn service() -> SftpService {
         let mut cfg = Config::for_test(
@@ -779,6 +969,199 @@ mod tests {
     fn candidate_ports_never_leave_the_valid_range() {
         assert_eq!(candidate_ports(65535), vec![65535]);
         assert_eq!(candidate_ports(65534), vec![65534, 65535]);
+    }
+
+    fn state_user(name: &str, password_set: bool, revision: u64) -> SftpUser {
+        serde_json::from_value(serde_json::json!({
+            "username": name,
+            "public_keys": ["ssh-ed25519 AAAA test@host"],
+            "password_set": password_set,
+            "password_revision": revision,
+            "folders": [],
+        }))
+        .unwrap()
+    }
+
+    fn password_state(users: Vec<SftpUser>) -> SftpState {
+        SftpState {
+            revision: "r1".to_string(),
+            users,
+        }
+    }
+
+    fn known_password(revision: u64, has_password: bool) -> BTreeMap<String, SftpPasswordState> {
+        let mut local = BTreeMap::new();
+        local.insert(
+            "u42".to_string(),
+            SftpPasswordState {
+                revision,
+                has_password,
+            },
+        );
+        local
+    }
+
+    #[test]
+    fn a_new_password_is_fetched_once_and_then_applied() {
+        let state = password_state(vec![state_user("u42", true, 2)]);
+
+        // Första varvet: ingen hemlighet känd, alltså ska den hämtas.
+        let plan = password_plan(&state, &BTreeMap::new(), &[], &BTreeMap::new());
+        assert_eq!(plan.fetch, vec![("u42".to_string(), 2)]);
+        assert!(plan.intents.is_empty());
+
+        // Andra varvet med svaret: applicera, ingen ny hämtning.
+        let secrets = vec![SftpSecret {
+            username: "u42".to_string(),
+            password: "hunter2".to_string(),
+            revision: 2,
+        }];
+        let plan = password_plan(&state, &BTreeMap::new(), &secrets, &BTreeMap::new());
+        assert_eq!(
+            plan.intents.get("u42"),
+            Some(&PasswordIntent::Set("hunter2".to_string()))
+        );
+        assert!(plan.fetch.is_empty());
+    }
+
+    #[test]
+    fn an_expired_secret_leaves_the_account_key_only() {
+        let state = password_state(vec![state_user("u42", true, 3)]);
+        let mut attempted = BTreeMap::new();
+        attempted.insert("u42".to_string(), 3);
+
+        // Noden var offline över TTL: hemligheten finns inte, men samma
+        // revision ska inte efterfrågas igen.
+        let plan = password_plan(&state, &known_password(2, true), &[], &attempted);
+        assert_eq!(plan.intents.get("u42"), Some(&PasswordIntent::Clear));
+        assert!(plan.fetch.is_empty(), "en försökt revision hämtas inte om");
+    }
+
+    #[test]
+    fn a_cleared_password_needs_no_secret() {
+        let state = password_state(vec![state_user("u42", false, 3)]);
+
+        let plan = password_plan(&state, &known_password(2, true), &[], &BTreeMap::new());
+        assert_eq!(plan.intents.get("u42"), Some(&PasswordIntent::Clear));
+        assert!(plan.fetch.is_empty());
+    }
+
+    #[test]
+    fn an_applied_revision_is_neither_fetched_nor_rewritten() {
+        let state = password_state(vec![state_user("u42", true, 2)]);
+
+        let plan = password_plan(&state, &known_password(2, true), &[], &BTreeMap::new());
+        assert_eq!(plan.intents.get("u42"), Some(&PasswordIntent::Keep));
+        assert!(plan.fetch.is_empty());
+    }
+
+    #[test]
+    fn an_account_without_a_password_or_keys_is_never_created() {
+        assert!(crate::sftpgo::desired_user(
+            "u42",
+            &[],
+            &[("myserver-ab12cd".to_string(), "/mnt".to_string())],
+            33,
+            33,
+            false,
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn the_receipt_reports_the_revision_only_while_a_password_exists() {
+        let state = password_state(vec![state_user("u42", true, 4)]);
+        let applied: BTreeSet<String> = ["u42".to_string()].into();
+
+        let mut intents = BTreeMap::new();
+        intents.insert(
+            "u42".to_string(),
+            PasswordIntent::Set("hunter2".to_string()),
+        );
+        let (known, reports) = password_receipt(&state, &intents, &applied, &BTreeMap::new());
+        assert_eq!(
+            known.get("u42"),
+            Some(&SftpPasswordState {
+                revision: 4,
+                has_password: true
+            })
+        );
+        assert_eq!(
+            reports,
+            vec![SftpStatusReport {
+                username: "u42".to_string(),
+                password_revision: 4
+            }]
+        );
+
+        // Ett rensat lösenord kvitteras som 0, aldrig som masterns revision.
+        let mut intents = BTreeMap::new();
+        intents.insert("u42".to_string(), PasswordIntent::Clear);
+        let (known, reports) = password_receipt(&state, &intents, &applied, &BTreeMap::new());
+        assert_eq!(
+            known.get("u42").map(|state| state.has_password),
+            Some(false)
+        );
+        assert_eq!(reports[0].password_revision, 0);
+    }
+
+    #[test]
+    fn every_managed_account_is_acknowledged_including_key_only_ones() {
+        let state = password_state(vec![
+            state_user("u42", false, 0),
+            state_user("u43", true, 3),
+        ]);
+        // u42 är nyckelbaserat och får aldrig en lösenordsändring; u43 har en
+        // applicerad revision. Båda ska kvitteras, annars visar panelen
+        // "missing" för konton som aldrig kommer att ändras.
+        let mut local = BTreeMap::new();
+        local.insert(
+            "u43".to_string(),
+            SftpPasswordState {
+                revision: 3,
+                has_password: true,
+            },
+        );
+
+        let (known, reports) = password_receipt(&state, &BTreeMap::new(), &BTreeSet::new(), &local);
+        assert!(known.is_empty());
+        assert_eq!(reports.len(), 2);
+        assert!(reports.contains(&SftpStatusReport {
+            username: "u42".to_string(),
+            password_revision: 0,
+        }));
+        assert!(reports.contains(&SftpStatusReport {
+            username: "u43".to_string(),
+            password_revision: 3,
+        }));
+    }
+
+    #[test]
+    fn an_account_whose_password_could_not_be_applied_reports_its_old_state() {
+        let state = password_state(vec![state_user("u42", true, 5)]);
+        let mut intents = BTreeMap::new();
+        intents.insert("u42".to_string(), PasswordIntent::Clear);
+        // Avsikten skrevs aldrig (SFTPGo-anropet föll), så revisionen får inte
+        // räknas som klar: kvittensen ska visa det noden faktiskt har.
+        let (known, reports) =
+            password_receipt(&state, &intents, &BTreeSet::new(), &known_password(4, true));
+        assert!(known.is_empty());
+        assert_eq!(reports[0].password_revision, 4);
+    }
+
+    #[test]
+    fn the_state_file_keeps_only_the_revision_and_a_flag() {
+        // Omstart utan klartext: det som sparas är metadata, aldrig lösenordet.
+        let value = serde_json::to_value(SftpPasswordState {
+            revision: 7,
+            has_password: true,
+        })
+        .unwrap();
+        assert_eq!(
+            value,
+            serde_json::json!({ "revision": 7, "has_password": true })
+        );
+        assert_eq!(value.as_object().unwrap().len(), 2);
     }
 
     #[test]
