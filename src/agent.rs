@@ -22,6 +22,15 @@ use crate::snapshot::Snapshotter;
 use crate::state::StateStore;
 use crate::telemetry::{Artifact, Reporter};
 
+/// Hur ofta servertelemetrin (inkl. loggrader) skickas. Regelgrinden och
+/// chatt-triggers läser spelarens join-/chattrader därifrån, så kadensen är
+/// också hur länge en inloggning kan stå oupptäckt.
+const TELEMETRY_SECONDS: u64 = 10;
+
+/// Tak för hur många köade kommandon ett varv får köra. En join köar en hel
+/// grindkedja; taket hindrar en stor kö från att svälta telemetrin.
+const MAX_COMMANDS_PER_TICK: usize = 10;
+
 /// Etapp 1 av Rust-agenten: enrollment, heartbeat, claim och ack.
 ///
 /// Kommandon som ännu inte är porterade ackas med `success=false` och
@@ -566,9 +575,15 @@ impl Agent {
 
         // Telemetrin hör inte till kommandokön: den måste skickas även när
         // claim är tomt, annars stannar panelens status så snart inget körs.
+        //
+        // 10 s i stället för 30 (2026-11-25): regelgrinden och chatt-triggers
+        // läser join- och chattrader ur rapporten, så en inloggning kunde stå
+        // oupptäckt i en halv minut innan prompten ens köades. Kadensen är
+        // avvägd mot kostnaden: en `docker logs` och en stats-läsning per
+        // server och varv.
         let report_due = self
             .last_report
-            .is_none_or(|at| at.elapsed() >= Duration::from_secs(30));
+            .is_none_or(|at| at.elapsed() >= Duration::from_secs(TELEMETRY_SECONDS));
         let assigned = if report_due {
             self.report_servers().await
         } else {
@@ -582,19 +597,50 @@ impl Agent {
             return Ok(());
         };
 
-        info!(
-            command_id = %command.id,
-            command_type = %command.command_type,
-            "claimed a command"
-        );
+        // Flera kommandon per varv (2026-11-25): en enda join köar en hel
+        // kedja (prompt, spelläge, interaktionslås, teleport, markör). Ett
+        // kommando per poll gjorde att sista steget kom flera tiotal sekunder
+        // efter prompten — spelaren hann gå iväg innan låset ens satts.
+        // Kön claimas i ordning, så agenten tömmer den tills den är tom eller
+        // taket nås; lease och ack är oförändrade.
+        let mut command = command;
+        let mut executed = 0usize;
+        let mut any_urgent = false;
 
-        let ack = self.execute(&command).await;
-        let result = self.api.acknowledge(&node_id, &command.id, &ack).await;
-        let urgent = matches!(
-            command.command_type.as_str(),
-            "start" | "stop" | "cancel_start" | "delete_server" | "migration_stop"
-        );
-        if urgent && !report_due {
+        loop {
+            info!(
+                command_id = %command.id,
+                command_type = %command.command_type,
+                "claimed a command"
+            );
+
+            let ack = self.execute(&command).await;
+            let result = self.api.acknowledge(&node_id, &command.id, &ack).await;
+            any_urgent |= matches!(
+                command.command_type.as_str(),
+                "start" | "stop" | "cancel_start" | "delete_server" | "migration_stop"
+            );
+
+            match result {
+                Ok(_) => {}
+                Err(AgentError::Conflict(body)) => {
+                    warn!(command_id = %command.id, error = %body, "lease expired before the acknowledge");
+                }
+                Err(err) => return Err(err),
+            }
+
+            executed += 1;
+            if executed >= MAX_COMMANDS_PER_TICK {
+                break;
+            }
+
+            command = match self.claim_next(&node_id).await? {
+                Some(next) => next,
+                None => break,
+            };
+        }
+
+        if any_urgent && !report_due {
             self.report_servers().await;
         }
         // SFTP-state synkas efter kommandot: nästa claim bär `sftp` och
@@ -602,14 +648,25 @@ impl Agent {
         // kommandoflödet — panelen slutar bara lova SFTP-slutpunkten.
         self.refresh_sftp().await;
 
-        match result {
-            Ok(_) => Ok(()),
-            Err(AgentError::Conflict(body)) => {
-                warn!(command_id = %command.id, error = %body, "lease expired before the acknowledge");
-                Ok(())
-            }
-            Err(err) => Err(err),
+        Ok(())
+    }
+
+    /// Nästa kommando i kön, samma väg som huvudvarvet använder: samma
+    /// sekvensräknare, samma lease och samma `node_settings`-hantering. Bara
+    /// kommandot returneras — telemetrin ägs av varvet, inte av kön.
+    async fn claim_next(&mut self, node_id: &str) -> Result<Option<Command>> {
+        let capabilities = self.sftp_capabilities();
+        let sequence = self.store.next_sequence()?;
+        let claim = self
+            .api
+            .claim(node_id, sequence, self.uptime_seconds(), &capabilities)
+            .await?;
+
+        if let Some(settings) = claim.node_settings.as_ref() {
+            self.remember_node_name(&settings.name)?;
         }
+
+        Ok(claim.command)
     }
 
     /// STOP går först över RCON (Minecrafts eget `stop`), med `docker stop`
