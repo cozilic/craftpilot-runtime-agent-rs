@@ -60,14 +60,16 @@ the Python agent — no master changes are required to run it side by side.
   the stored RCON password, answering `SERVER_DELETED`. A symlinked or escaping data directory is
   refused and a missing one is a successful no-op, so a re-delivered command never fails.
 - **TELEMETRY** (`servers` + `servers/report`): roughly every 10 s — 10 s counted from the end of
-  the previous report, rounded up to the 5 s poll tick, plus the collection itself (measured 13.6 s
-  with one ONLINE server and 15.8 s with two; `docker stats --no-stream` is ~2 s of that per ONLINE
-  server) — and immediately after a start/stop,
-  the agent reports its assigned servers: status from `docker inspect` (missing → `OFFLINE`,
-  running → `ONLINE`, exited 0 → `OFFLINE`, non-zero → `CRASHED`), CPU/memory from
-  `docker stats --no-stream`, raw network counters (`network_rx_bytes`/`network_tx_bytes`) from the
-  Docker Engine API `/containers/{id}/stats` through bollard, summed over every interface (the
-  CLI's `NetIO` is rounded, so it cannot be used; a stopped container sends no counters at all),
+  the previous report, rounded up to the 5 s poll tick, plus the collection itself (measured 10.8 s
+  with one ONLINE server and 10.9 s with two; the collection itself is ~0.2 s) — and immediately
+  after a start/stop, the agent reports its assigned servers: status from `docker inspect`
+  (missing → `OFFLINE`, running → `ONLINE`, exited 0 → `OFFLINE`, non-zero → `CRASHED`), CPU,
+  memory and raw network counters (`network_rx_bytes`/`network_tx_bytes`) from **one** Docker
+  Engine API `/containers/{id}/stats` read through bollard (`stream=false&one-shot=true`, a few
+  ms): CPU is a percentage of the delta since the previous report (one-shot leaves
+  `precpu_stats` at zero), memory subtracts the page cache the way the CLI does, and the network
+  counters are summed over every interface (the CLI's `NetIO` is rounded, so it cannot be used;
+  a stopped container sends no counters at all),
   `players_max` from `server.properties` (`max-players`, default 20),
   `players_online` from join/leave console lines, `disk_used_mb` from a recursive walk of the
   server directory (cached for five minutes, symlinks are never followed), `artifact_present`

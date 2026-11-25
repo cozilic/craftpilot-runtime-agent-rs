@@ -8,7 +8,7 @@ use tokio::process::Command as ProcessCommand;
 use tokio::time::{sleep, timeout};
 use tracing::{info, warn};
 
-use crate::docker_api::DockerApi;
+use crate::docker_api::{ContainerSample, DockerApi};
 use crate::error::{AgentError, Result};
 use crate::rcon::{self, RconSettings};
 
@@ -50,12 +50,6 @@ pub struct ContainerState {
     /// Unix-tid för när containern startade (Dockers `State.StartedAt`).
     /// Används för uptime i telemetrin; None när tiden inte går att läsa.
     pub started_at_epoch: Option<i64>,
-}
-
-pub struct ContainerStats {
-    pub cpu_percent: Option<f64>,
-    pub memory_used_mb: Option<u64>,
-    pub memory_limit_mb: Option<u64>,
 }
 
 impl Docker {
@@ -413,51 +407,13 @@ impl Docker {
         }))
     }
 
-    /// Ett `docker stats`-svar per container: CPU i procent och minne i MB.
-    pub async fn stats(&self, server_id: &str) -> Result<Option<ContainerStats>> {
-        let name = container_name(server_id);
-        let output = self
-            .run_raw(
-                &["stats", "--no-stream", "--format", "{{json .}}", &name],
-                15,
-            )
-            .await?;
-        if !output.status.success() {
-            let detail = normalized(&output.stderr);
-            if is_missing_container_error(&detail) {
-                return Ok(None);
-            }
-            return Err(AgentError::Runtime(format!(
-                "docker stats failed: {}",
-                truncate(&detail)
-            )));
-        }
-
-        let raw = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        if raw.is_empty() {
-            return Ok(None);
-        }
-        let value: Value = serde_json::from_str(&raw)
-            .map_err(|_| AgentError::Runtime("docker returned invalid container stats".into()))?;
-        let memory = value.get("MemUsage").and_then(Value::as_str);
-
-        Ok(Some(ContainerStats {
-            cpu_percent: value
-                .get("CPUPerc")
-                .and_then(Value::as_str)
-                .and_then(percent),
-            memory_used_mb: memory.and_then(|value| memory_pair(value).0),
-            memory_limit_mb: memory.and_then(|value| memory_pair(value).1),
-        }))
-    }
-
-    /// Containerns kumulativa nätverksräknare (2026-11-20), summerade över
-    /// alla interface. `docker stats`-CLI:t avrundar `NetIO`, så räknarna
-    /// läses ur Docker Engine API i stället. Samma container som `stats`
-    /// läser: namnet mastern tilldelat servern. Ett fel ger tomma värden och
-    /// stoppar aldrig rapporten.
-    pub async fn network_counters(&self, server_id: &str) -> (Option<u64>, Option<u64>) {
-        self.api.container_net_io(&container_name(server_id)).await
+    /// CPU, minne och nätverksräknare i EN Engine API-läsning (2026-11-25).
+    /// CLI:t `docker stats --no-stream` kostade ~2 s per ONLINE-server på
+    /// Docker Desktop och gav bara avrundade värden; samma endpoint via
+    /// bollard svarar på millisekunder. Ett fel ger `None` — rapporten går ut
+    /// utan fälten i stället för att stanna.
+    pub async fn sample(&self, server_id: &str) -> Option<ContainerSample> {
+        self.api.container_sample(&container_name(server_id)).await
     }
 
     /// Nya konsolrader med Docker-tidsstämpel. En saknad container ger en
@@ -819,40 +775,6 @@ pub fn is_uuid(value: &str) -> bool {
         })
 }
 
-fn percent(value: &str) -> Option<f64> {
-    value
-        .trim()
-        .trim_end_matches('%')
-        .parse::<f64>()
-        .ok()
-        .filter(|value| (0.0..=1000.0).contains(value))
-}
-
-/// `123.4MiB / 1GiB` → (123, 1024) i MB.
-fn memory_pair(value: &str) -> (Option<u64>, Option<u64>) {
-    let mut parts = value.split('/');
-    let used = parts.next().and_then(megabytes);
-    let limit = parts.next().and_then(megabytes);
-    (used, limit)
-}
-
-fn megabytes(value: &str) -> Option<u64> {
-    let value = value.trim();
-    let split = value.find(|ch: char| !ch.is_ascii_digit() && ch != '.')?;
-    let amount = value[..split].parse::<f64>().ok()?;
-    let unit = value[split..].trim().to_ascii_lowercase();
-    let factor = match unit.as_str() {
-        "b" => 1.0 / (1024.0 * 1024.0),
-        "kib" | "kb" => 1.0 / 1024.0,
-        "mib" | "mb" => 1.0,
-        "gib" | "gb" => 1024.0,
-        "tib" | "tb" => 1024.0 * 1024.0,
-        _ => return None,
-    };
-
-    Some((amount * factor).round() as u64)
-}
-
 fn is_container_id(value: &str) -> bool {
     (12..=64).contains(&value.len()) && value.chars().all(|ch| ch.is_ascii_hexdigit())
 }
@@ -1098,18 +1020,6 @@ mod tests {
         let mut value = payload();
         value["container"]["memory_mb"] = json!(16);
         assert!(ContainerSpec::parse(&value, "craftpilot-096d46aa").is_err());
-    }
-
-    #[test]
-    fn parses_docker_stats_values() {
-        assert_eq!(percent("12.50%"), Some(12.5));
-        assert_eq!(percent("0.00%"), Some(0.0));
-        assert_eq!(percent("not-a-number"), None);
-        assert_eq!(percent("5000%"), None);
-
-        assert_eq!(memory_pair("123.4MiB / 1GiB"), (Some(123), Some(1024)));
-        assert_eq!(memory_pair("512KiB / 2GiB"), (Some(1), Some(2048)));
-        assert_eq!(memory_pair("weird"), (None, None));
     }
 
     #[test]

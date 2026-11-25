@@ -3,7 +3,24 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use crate::docker::Docker;
+use crate::docker_api::ContainerSample;
 use crate::error::Result;
+
+/// Docker Engine API:s CPU-formel ur två kumulativa sampel.
+fn percent_between(
+    (previous_total, previous_system): (u64, u64),
+    (total, system): (u64, u64),
+    cpus: u64,
+) -> Option<f64> {
+    if system <= previous_system || total < previous_total {
+        return None;
+    }
+
+    let percent = (total - previous_total) as f64 / (system - previous_system) as f64
+        * cpus.max(1) as f64
+        * 100.0;
+    (0.0..=1000.0).contains(&percent).then_some(percent)
+}
 
 /// Hur många loggrader en rapport får bära (masterns `LOG_WINDOW`).
 const LOG_WINDOW: usize = 400;
@@ -23,6 +40,9 @@ pub struct Artifact<'a> {
 pub struct Reporter {
     players: HashMap<String, i64>,
     disk: HashMap<String, (Instant, u64)>,
+    /// Senaste kumulativa CPU-räknarna (total, system) per server. `one-shot`
+    /// lämnar `precpu_stats` med nollor, så deltat räknas mot förra rapporten.
+    cpu: HashMap<String, (u64, u64)>,
 }
 
 pub struct Sample {
@@ -50,6 +70,7 @@ impl Reporter {
         Self {
             players: HashMap::new(),
             disk: HashMap::new(),
+            cpu: HashMap::new(),
         }
     }
 
@@ -70,17 +91,22 @@ impl Reporter {
         };
 
         let online = status == "ONLINE";
+        // CPU, minne och nätverksräknare i EN Engine API-läsning (2026-11-25).
+        // Bara en körande container mäts: en stoppad svarar med nollor som ser
+        // ut som en mätning. Ett fält som saknas blir `None` och hoppas över i
+        // rapporten.
         let stats = if online {
-            docker.stats(server_id).await?
+            docker.sample(server_id).await
         } else {
             None
         };
-        // Räknarna läses bara medan containern kör: en stoppad container
-        // svarar med nollor som ser ut som en mätning.
-        let (network_rx_bytes, network_tx_bytes) = if online {
-            docker.network_counters(server_id).await
-        } else {
-            (None, None)
+        let (network_rx_bytes, network_tx_bytes) = match &stats {
+            Some(stats) => (stats.network_rx_bytes, stats.network_tx_bytes),
+            None => (None, None),
+        };
+        let cpu_percent = match &stats {
+            Some(stats) => self.cpu_percent(server_id, stats),
+            None => None,
         };
         let uptime_seconds = state
             .as_ref()
@@ -120,7 +146,7 @@ impl Reporter {
 
         Ok(Sample {
             status,
-            cpu_percent: stats.as_ref().and_then(|stats| stats.cpu_percent),
+            cpu_percent,
             memory_used_mb: stats.as_ref().and_then(|stats| stats.memory_used_mb),
             memory_limit_mb: stats.as_ref().and_then(|stats| stats.memory_limit_mb),
             uptime_seconds,
@@ -135,9 +161,23 @@ impl Reporter {
         })
     }
 
+    /// CPU i procent sedan FÖREGÅENDE rapport (Docker Engine API:s formel:
+    /// delta CPU-tid / delta systemtid × kärnor × 100). Räknarna är
+    /// kumulativa och `one-shot` bär ingen `precpu_stats`, så deltat hålls här.
+    /// Första rapporten för en server — och en omstartad container, där
+    /// räknaren går bakåt — lämnar `None` och blir en mätning nästa varv.
+    fn cpu_percent(&mut self, server_id: &str, stats: &ContainerSample) -> Option<f64> {
+        let (Some(total), Some(system)) = (stats.cpu_total_usage, stats.system_cpu_usage) else {
+            return None;
+        };
+        let previous = self.cpu.insert(server_id.to_string(), (total, system))?;
+
+        percent_between(previous, (total, system), stats.online_cpus.unwrap_or(1))
+    }
+
     /// Nya konsolrader sedan cursorn UTAN stats, ping eller disk (2026-11-25).
     /// Den snabba loggposten kör varje sekund och får inte kosta en
-    /// `docker stats`-läsning per server och varv; bara `docker logs`.
+    /// stats-läsning per server och varv; bara `docker logs`.
     ///
     /// Loggkursorn returneras bara tillsammans med raderna: anroparen flyttar
     /// den när mastern kvitterat, så en tappad post skickas om i stället för
@@ -405,6 +445,55 @@ mod tests {
         reporter.apply_player_event("srv", "Alex left the game");
         reporter.apply_player_event("srv", "Alex left the game");
         assert_eq!(reporter.players.get("srv").copied(), Some(0));
+    }
+
+    #[test]
+    fn cpu_is_the_delta_since_the_previous_report() {
+        let mut reporter = Reporter::new();
+        let first = ContainerSample {
+            cpu_total_usage: Some(1_000_000_000),
+            system_cpu_usage: Some(10_000_000_000),
+            online_cpus: Some(2),
+            ..Default::default()
+        };
+        // Första rapporten har inget delta att jämföra med.
+        assert_eq!(reporter.cpu_percent("srv", &first), None);
+
+        let second = ContainerSample {
+            cpu_total_usage: Some(2_000_000_000),
+            system_cpu_usage: Some(20_000_000_000),
+            online_cpus: Some(2),
+            ..Default::default()
+        };
+        let percent = reporter.cpu_percent("srv", &second).expect("a percentage");
+        assert!((percent - 20.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn a_restarted_container_has_no_cpu_until_the_next_report() {
+        let mut reporter = Reporter::new();
+        let before = ContainerSample {
+            cpu_total_usage: Some(5_000),
+            system_cpu_usage: Some(10_000),
+            ..Default::default()
+        };
+        assert_eq!(reporter.cpu_percent("srv", &before), None);
+
+        // Räknaren går bakåt vid omstart → ingen procent, men det nya värdet
+        // sparas så nästa rapport mäter igen.
+        let restarted = ContainerSample {
+            cpu_total_usage: Some(1),
+            system_cpu_usage: Some(20_000),
+            ..Default::default()
+        };
+        assert_eq!(reporter.cpu_percent("srv", &restarted), None);
+
+        let next = ContainerSample {
+            cpu_total_usage: Some(1_001),
+            system_cpu_usage: Some(30_000),
+            ..Default::default()
+        };
+        assert!(reporter.cpu_percent("srv", &next).is_some());
     }
 
     #[test]
