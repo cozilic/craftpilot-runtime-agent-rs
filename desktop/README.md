@@ -106,7 +106,7 @@ vägen när **Bara manuellt** är valt. Nästa automatiska kontroll räknas frå
 inte från att panelen startade.
 
 **Kontrollera nu** visar vad som händer i panelens progress-bar: **Kontrollerar ny version…**, och
-sedan **Ny version v0.14.0 hittad** under knappen. Finns en nyare version blir **Ladda ner och
+sedan **Ny version v0.15.0 hittad** under knappen. Finns en nyare version blir **Ladda ner och
 starta om** synlig på samma rad — den laddar ner exen och visar **Hämtar versionsinformation…**,
 **Hämtar ny version…** (med procent), **Kontrollerar filen…**, **Installerar panelen…** och
 **Startar om panelen…**. Samma knapp finns i bannern i Översikt.
@@ -129,7 +129,7 @@ panelens inställningsfil. Kommer agenten inte upp inom tre minuter från startf
 en notis i stället för att noden tystnar.
 
 **Avbryt** avbryter en pågående åtgärd (installation, uppdatering, stopp eller borttagning).
-**Uppdatera** hämtar den image som compose-filen pekar på (`:0.14`) och startar om agenten. **Stoppa** stoppar
+**Uppdatera** hämtar den image som compose-filen pekar på (`:0.15`) och startar om agenten. **Stoppa** stoppar
 containern men behåller både serverdata och agentens state. **Ta bort** tar bort containern och
 panelens installationsfiler (`.env.desktop` och `compose.desktop.yaml`); serverdata, agentens
 state-volym och nodens credential ligger kvar, så nästa installation återansluter samma nod.

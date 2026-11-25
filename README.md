@@ -156,7 +156,7 @@ A download larger than `CRAFTPILOT_MAX_UPLOAD_BYTES` is refused before anything 
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `CRAFTPILOT_MASTER_URL` | – (required) | Master origin (HTTPS, no path). The agent refuses to start without it. |
-| `CRAFTPILOT_RS_AGENT_IMAGE_TAG` | `0.14` | Image tag the compose files run. Both are read with `--env-file`, so a new image needs no new Desktop build. |
+| `CRAFTPILOT_RS_AGENT_IMAGE_TAG` | `0.15` | Image tag the compose files run. Both are read with `--env-file`, so a new image needs no new Desktop build. |
 | `CRAFTPILOT_AGENT_STATE_DIR` | `/var/lib/craftpilot-agent` | Private state directory. |
 | `CRAFTPILOT_SERVER_DATA_ROOT` | `/srv/craftpilot/servers` | Server data root (used once operations land). |
 | `CRAFTPILOT_NODE_ID` | – | Only to attach an existing node. |
@@ -295,8 +295,8 @@ For Docker Desktop on macOS or Windows, use `compose.desktop.yaml`; see
 
 ### Update a node
 
-`compose.yaml` and `compose.desktop.yaml` pin the image to the stable `0.14` tag, so a node follows
-the 0.14.x releases instead of every push to `main`. `scripts/check-version.sh`, which CI runs,
+`compose.yaml` and `compose.desktop.yaml` pin the image to the stable `0.15` tag, so a node follows
+the 0.15.x releases instead of every push to `main`. `scripts/check-version.sh`, which CI runs,
 fails when Cargo, the panel, the compose files and these docs disagree.
 
 ```sh
@@ -304,12 +304,12 @@ cd /opt/craftpilot-agent
 sudo docker compose pull && sudo docker compose up -d
 ```
 
-An existing install keeps its compose file, so change `:main` to `:0.14` there once
+An existing install keeps its compose file, so change `:main` to `:0.15` there once
 (`/opt/craftpilot-agent/compose.yaml`, or the panel's install directory on Windows) before pulling.
 
 Re-running `sudo ./setup.sh` does the same. On Windows the panel's **Uppdatera** button
 pulls the new image and restarts the container. The tag comes from
-`CRAFTPILOT_RS_AGENT_IMAGE_TAG` (default `0.14`) in the compose files, so a new minor release is one
+`CRAFTPILOT_RS_AGENT_IMAGE_TAG` (default `0.15`) in the compose files, so a new minor release is one
 line in `.env` or `.env.desktop` instead of a new Desktop build.
 
 `.github/workflows/publish-image.yml` builds the Docker image on every pull request and
