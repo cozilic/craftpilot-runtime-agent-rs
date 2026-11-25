@@ -225,11 +225,18 @@ session lives. When the folder list of an account changes, the agent therefore s
 connection without signing out and in. A change to keys, uid/gid or home directory uses a plain
 `PUT`: an open transfer must not be thrown out just because a key was rotated.
 
-Accounts are key-only: the master's password channel is disabled and not implemented here, so
-a user without a public key gets no account (never an account without an authentication
-method). Folder paths are built from the master's `server_id` only after the directory is
-confirmed to be a real directory under the data root — a symlink or a path outside the root
-is skipped, never mounted.
+Accounts are key-based by default. A node that reports `sftp-password` (the master's
+`SFTP_NODE_PASSWORD_ENABLED` channel) also accepts a password: the user state carries
+`password_set` and `password_revision`, and when the revision is newer than the node's own the
+agent fetches the secret once via `POST …/sftp/secrets`, applies it to the local SFTPGo and
+drops the plaintext from memory before acknowledging the revision with `POST …/sftp/status`.
+Only the revision and whether a password exists are written to the state file — never the
+password, and never to logs. A secret that is no longer available (the node was offline past
+the TTL) leaves the account key-only and is not acknowledged; an account with neither a key nor
+a password is removed, so no account ever exists without an authentication method. Folder
+paths are built from the master's `server_id` only after the directory is confirmed to be a
+real directory under the data root — a symlink or a path outside the root is skipped, never
+mounted.
 
 If the SFTPGo admin password and its config volume get out of sync (for example after the
 volume was deleted but the agent state kept), the admin API answers `401` and the agent logs

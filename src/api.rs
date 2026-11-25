@@ -11,7 +11,7 @@ use crate::model::{
     AckRequest, ClaimResponse, EnrollmentCreated, EnrollmentPoll, HeartbeatResponse,
     NodeCapabilities, RegisterResponse, StatusResponse,
 };
-use crate::sftpgo::SftpState;
+use crate::sftpgo::{SftpSecret, SftpSecrets, SftpState, SftpStatusReport};
 
 /// Tunn klient mot masterns `/api/runtime/...`-endpoints. Inga redirects
 /// följs (samma regel som Python-agenten), och credentialen skickas bara
@@ -96,6 +96,34 @@ impl MasterClient {
             status if status.is_success() => {
                 serde_json::from_str::<T>(&body).map_err(AgentError::from)
             }
+            status => Err(request_error(status.as_u16(), body)),
+        }
+    }
+
+    /// Som `request`, men för endpoints som svarar `204` utan kropp. Svaret
+    /// töms ändå, så anslutningen återanvänds.
+    async fn request_empty<B>(&self, method: Method, path: &str, body: Option<&B>) -> Result<()>
+    where
+        B: serde::Serialize + ?Sized,
+    {
+        let credential = self.credential.as_deref().ok_or(AgentError::Unauthorized)?;
+        let mut request = self
+            .http
+            .request(method, self.url(path)?)
+            .header("Accept", "application/json")
+            .bearer_auth(credential);
+        if let Some(body) = body {
+            request = request.json(body);
+        }
+
+        let response = request.send().await?;
+        let status = response.status();
+        let body = response.text().await?;
+
+        match status {
+            StatusCode::UNAUTHORIZED => Err(AgentError::Unauthorized),
+            StatusCode::CONFLICT => Err(AgentError::Conflict(body)),
+            status if status.is_success() => Ok(()),
             status => Err(request_error(status.as_u16(), body)),
         }
     }
@@ -271,6 +299,38 @@ impl MasterClient {
             &format!("api/runtime/nodes/{node_id}/sftp"),
             None::<&Value>,
             true,
+        )
+        .await
+    }
+
+    /// Engångshemligheterna noden ännu inte kvitterat. Tomt är normalfallet;
+    /// endpointen har budgeten 10/min, så agenten frågar bara när en revision
+    /// är nyare än nodens egen och aldrig två gånger för samma revision.
+    pub async fn sftp_secrets(&self, node_id: &str) -> Result<Vec<SftpSecret>> {
+        let secrets: SftpSecrets = self
+            .request(
+                Method::POST,
+                &format!("api/runtime/nodes/{node_id}/sftp/secrets"),
+                None::<&Value>,
+                true,
+            )
+            .await?;
+        Ok(secrets.secrets)
+    }
+
+    /// Kvitterar vilken lösenordsrevision nodens SFTPGo har. Mastern svarar
+    /// `204`; en `422` betyder att ett användarnamn inte ingår i nodens state
+    /// och ska inte stoppa SFTP-synken.
+    pub async fn report_sftp_status(
+        &self,
+        node_id: &str,
+        users: &[SftpStatusReport],
+    ) -> Result<()> {
+        let body = serde_json::json!({ "users": users });
+        self.request_empty(
+            Method::POST,
+            &format!("api/runtime/nodes/{node_id}/sftp/status"),
+            Some(&body),
         )
         .await
     }
