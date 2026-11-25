@@ -59,7 +59,7 @@ the Python agent — no master changes are required to run it side by side.
   ownership label check; a missing container is a no-op) and then `<data root>/<server uuid>` and
   the stored RCON password, answering `SERVER_DELETED`. A symlinked or escaping data directory is
   refused and a missing one is a successful no-op, so a re-delivered command never fails.
-- **TELEMETRY** (`servers` + `servers/report`): every 30 s, and immediately after a start/stop,
+- **TELEMETRY** (`servers` + `servers/report`): every 10 s, and immediately after a start/stop,
   the agent reports its assigned servers: status from `docker inspect` (missing → `OFFLINE`,
   running → `ONLINE`, exited 0 → `OFFLINE`, non-zero → `CRASHED`), CPU/memory from
   `docker stats --no-stream`, raw network counters (`network_rx_bytes`/`network_tx_bytes`) from the
@@ -72,6 +72,11 @@ the Python agent — no master changes are required to run it side by side.
   `docker logs --timestamps` with a cursor persisted in the state volume (the first report sends a
   400-line backlog; after a restart only new lines are sent).
   Each report consumes a new sequence number, so the master never sees it as a replay.
+- **CONSOLE PUSH** (`servers/{server}/logs`): while a server runs, new console lines are read
+  every second and posted on their own, so a join or a chat line reaches the panel within a
+  moment instead of at the next report. The cursor moves only after the master acknowledges the
+  lines, and the 10 s report still carries the same lines, so a dropped push costs one interval
+  at most. A master without the endpoint (`404`) turns the fast path off for that run.
 - **MIGRATIONS** (`migration_prepare`, `migration_stop`, `migration_export`, `migration_import`,
   `migration_commit`, `migration_delete_source`): the destination creates an X25519 keypair and
   keeps the private half in the agent state volume (`0600`); the source archives the server root,
@@ -156,7 +161,7 @@ A download larger than `CRAFTPILOT_MAX_UPLOAD_BYTES` is refused before anything 
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `CRAFTPILOT_MASTER_URL` | – (required) | Master origin (HTTPS, no path). The agent refuses to start without it. |
-| `CRAFTPILOT_RS_AGENT_IMAGE_TAG` | `0.15` | Image tag the compose files run. Both are read with `--env-file`, so a new image needs no new Desktop build. |
+| `CRAFTPILOT_RS_AGENT_IMAGE_TAG` | `0.16` | Image tag the compose files run. Both are read with `--env-file`, so a new image needs no new Desktop build. |
 | `CRAFTPILOT_AGENT_STATE_DIR` | `/var/lib/craftpilot-agent` | Private state directory. |
 | `CRAFTPILOT_SERVER_DATA_ROOT` | `/srv/craftpilot/servers` | Server data root (used once operations land). |
 | `CRAFTPILOT_NODE_ID` | – | Only to attach an existing node. |
@@ -295,8 +300,8 @@ For Docker Desktop on macOS or Windows, use `compose.desktop.yaml`; see
 
 ### Update a node
 
-`compose.yaml` and `compose.desktop.yaml` pin the image to the stable `0.15` tag, so a node follows
-the 0.15.x releases instead of every push to `main`. `scripts/check-version.sh`, which CI runs,
+`compose.yaml` and `compose.desktop.yaml` pin the image to the stable `0.16` tag, so a node follows
+the 0.16.x releases instead of every push to `main`. `scripts/check-version.sh`, which CI runs,
 fails when Cargo, the panel, the compose files and these docs disagree.
 
 ```sh
@@ -304,12 +309,12 @@ cd /opt/craftpilot-agent
 sudo docker compose pull && sudo docker compose up -d
 ```
 
-An existing install keeps its compose file, so change `:main` to `:0.15` there once
+An existing install keeps its compose file, so change `:main` to `:0.16` there once
 (`/opt/craftpilot-agent/compose.yaml`, or the panel's install directory on Windows) before pulling.
 
 Re-running `sudo ./setup.sh` does the same. On Windows the panel's **Uppdatera** button
 pulls the new image and restarts the container. The tag comes from
-`CRAFTPILOT_RS_AGENT_IMAGE_TAG` (default `0.15`) in the compose files, so a new minor release is one
+`CRAFTPILOT_RS_AGENT_IMAGE_TAG` (default `0.16`) in the compose files, so a new minor release is one
 line in `.env` or `.env.desktop` instead of a new Desktop build.
 
 `.github/workflows/publish-image.yml` builds the Docker image on every pull request and
