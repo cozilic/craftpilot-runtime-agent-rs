@@ -32,6 +32,12 @@ const TELEMETRY_SECONDS: u64 = 10;
 /// grindkedja; taket hindrar en stor kö från att svälta telemetrin.
 const MAX_COMMANDS_PER_TICK: usize = 10;
 
+/// Hur ofta nya konsolrader läses och skickas (2026-11-25). Rapporten går
+/// fortfarande var `TELEMETRY_SECONDS` och bär samma rader som reserv — den
+/// här vägen är bara en snabbare leverans av join-/chattrader, inget nytt
+/// sanningstillstånd.
+const CONSOLE_PUSH_SECONDS: u64 = 1;
+
 /// Etapp 1 av Rust-agenten: enrollment, heartbeat, claim och ack.
 ///
 /// Kommandon som ännu inte är porterade ackas med `success=false` och
@@ -53,6 +59,11 @@ pub struct Agent {
     reporter: Reporter,
     last_report: Option<Instant>,
     assigned_servers: BTreeSet<String>,
+    /// Servrar senaste rapporten såg som ONLINE — bara de kan få nya
+    /// konsolrader, så den snabba vägen läser inte stoppade containrar.
+    online_servers: BTreeSet<String>,
+    /// Avstängd när mastern inte har den snabba loggrutten (äldre master).
+    console_push: bool,
     last_file_tree_progress: Option<String>,
     started_at: Instant,
     /// Push-signalen från nodens Reverb-kanal: väcker kommandoloopet så att
@@ -112,6 +123,8 @@ impl Agent {
             reporter: Reporter::new(),
             last_report: None,
             assigned_servers: BTreeSet::new(),
+            online_servers: BTreeSet::new(),
+            console_push: true,
             last_file_tree_progress: None,
             started_at: Instant::now(),
             wake: Arc::new(tokio::sync::Notify::new()),
@@ -510,6 +523,10 @@ impl Agent {
         // Egen klon: `select!` håller framtiden lånad medan armen kör, och
         // `tick` behöver `&mut self`.
         let wake = Arc::clone(&self.wake);
+        // Absolut deadline i stället för en ny `sleep(poll)` per varv: den
+        // snabba konsol-armen vaknar varje sekund, och en relativ sömn skulle
+        // startas om hela tiden så att poll-varvet aldrig nådde fram.
+        let mut next_tick = tokio::time::Instant::now() + poll;
 
         loop {
             tokio::select! {
@@ -518,7 +535,10 @@ impl Agent {
                     info!("shutdown requested");
                     return Ok(());
                 }
-                _ = sleep(poll) => self.tick_with_recovery().await,
+                _ = tokio::time::sleep_until(next_tick) => {
+                    self.tick_with_recovery().await;
+                    next_tick = tokio::time::Instant::now() + poll;
+                }
                 _ = wake.notified() => {
                     // Ett kommando har köats på mastern: claima nu i stället
                     // för att vänta ut poll-intervallet. Pollningen finns
@@ -526,6 +546,92 @@ impl Agent {
                     // fördröjning — aldrig ett kommando.
                     debug!("wake received from the push channel");
                     self.tick_with_recovery().await;
+                    next_tick = tokio::time::Instant::now() + poll;
+                }
+                _ = sleep(Duration::from_secs(CONSOLE_PUSH_SECONDS)) => {
+                    // Nya konsolrader skickas sekunden de dyker upp: en join
+                    // eller chattrad ska synas i panelen direkt i stället för
+                    // vid nästa telemetrirapport.
+                    self.push_console_lines().await;
+                }
+            }
+        }
+    }
+
+    /// Nya konsolrader direkt till mastern (2026-11-25).
+    ///
+    /// Bara körande servrar läses: en stoppad container kan inte få nya rader,
+    /// och `docker logs` per server och sekund ska inte kosta något i onödan.
+    /// Cursorn flyttas först när mastern kvitterat, så en tappad post skickas
+    /// om i stället för att tappas — rapportens 10 s-väg bär samma rader som
+    /// reserv. En master utan rutten stänger av den här vägen helt.
+    async fn push_console_lines(&mut self) {
+        if !self.console_push {
+            return;
+        }
+        let Some(node_id) = self.store.state().node_id.clone() else {
+            return;
+        };
+
+        let servers: Vec<String> = self
+            .online_servers
+            .intersection(&self.assigned_servers)
+            .cloned()
+            .collect();
+
+        for id in servers {
+            let since = self.store.log_cursor(&id).map(str::to_string);
+            let (logs, cursor) = match self
+                .reporter
+                .new_logs(&self.docker, &id, since.as_deref())
+                .await
+            {
+                Ok(batch) => batch,
+                Err(err) => {
+                    debug!(server_id = %id, error = %err, "reading new console lines failed");
+                    continue;
+                }
+            };
+            if logs.is_empty() {
+                continue;
+            }
+
+            let sequence = match self.store.next_sequence() {
+                Ok(sequence) => sequence,
+                Err(err) => {
+                    warn!(error = %err, "advancing the console sequence failed");
+                    return;
+                }
+            };
+            let body = json!({
+                "sequence": sequence,
+                "lines": logs
+                    .iter()
+                    .map(|(ts, text)| json!({ "ts": ts, "text": text }))
+                    .collect::<Vec<_>>(),
+            });
+
+            match self.api.report_console_lines(&node_id, &id, &body).await {
+                Ok(_) => {
+                    if let Some(cursor) = cursor.as_deref() {
+                        if since.as_deref() != Some(cursor) {
+                            if let Err(err) = self.store.set_log_cursor(&id, cursor) {
+                                warn!(server_id = %id, error = %err, "saving the log cursor failed");
+                            }
+                        }
+                    }
+                }
+                // En äldre master känner inte rutten: försök inte varje
+                // sekund. Rapporten bär raderna som förut.
+                Err(AgentError::Rejected { status: 404, .. }) => {
+                    self.console_push = false;
+                    debug!(
+                        "the master has no direct console endpoint; the report carries the lines"
+                    );
+                    return;
+                }
+                Err(err) => {
+                    warn!(server_id = %id, error = %err, "posting console lines failed")
                 }
             }
         }
@@ -1281,6 +1387,7 @@ impl Agent {
             .collect::<BTreeSet<_>>();
         self.assigned_servers = assigned.clone();
         let artifacts = listing.get("artifacts");
+        let mut online = BTreeSet::new();
 
         for id in servers.iter().filter_map(Value::as_str) {
             let artifact = artifacts.and_then(|map| map.get(id)).and_then(|entry| {
@@ -1313,6 +1420,10 @@ impl Agent {
                         warn!(server_id = %id, error = %err, "saving the log cursor failed");
                     }
                 }
+            }
+
+            if sample.status == "ONLINE" {
+                online.insert(id.to_string());
             }
 
             let sequence = match self.store.next_sequence() {
@@ -1378,6 +1489,9 @@ impl Agent {
             }
         }
 
+        // Bara det senaste varvet är sant: en server som stoppats ska inte
+        // läsas varje sekund förrän nästa rapport säger ONLINE igen.
+        self.online_servers = online;
         self.last_report = Some(Instant::now());
         assigned
     }
