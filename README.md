@@ -59,7 +59,10 @@ the Python agent — no master changes are required to run it side by side.
   ownership label check; a missing container is a no-op) and then `<data root>/<server uuid>` and
   the stored RCON password, answering `SERVER_DELETED`. A symlinked or escaping data directory is
   refused and a missing one is a successful no-op, so a re-delivered command never fails.
-- **TELEMETRY** (`servers` + `servers/report`): every 10 s, and immediately after a start/stop,
+- **TELEMETRY** (`servers` + `servers/report`): roughly every 10 s — 10 s counted from the end of
+  the previous report, rounded up to the 5 s poll tick, plus the collection itself (measured 13.6 s
+  with one ONLINE server and 15.8 s with two; `docker stats --no-stream` is ~2 s of that per ONLINE
+  server) — and immediately after a start/stop,
   the agent reports its assigned servers: status from `docker inspect` (missing → `OFFLINE`,
   running → `ONLINE`, exited 0 → `OFFLINE`, non-zero → `CRASHED`), CPU/memory from
   `docker stats --no-stream`, raw network counters (`network_rx_bytes`/`network_tx_bytes`) from the
