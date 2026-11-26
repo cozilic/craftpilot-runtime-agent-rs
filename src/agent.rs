@@ -38,6 +38,13 @@ const MAX_COMMANDS_PER_TICK: usize = 10;
 /// sanningstillstånd.
 const CONSOLE_PUSH_SECONDS: u64 = 1;
 
+/// Hur länge agenten väntar innan den läser konsolraderna efter ett utfört
+/// kommando (2026-11-26). Kommandot skrivs till serverns konsol-FIFO, men
+/// svarsraden skrivs först när spelet hunnit läsa kommandot — utan en kort
+/// paus läste posten raden före svaret och då hade den ändå fått vänta på
+/// nästa sekundvarv.
+const POST_COMMAND_PUSH_DELAY_MS: u64 = 150;
+
 /// Etapp 1 av Rust-agenten: enrollment, heartbeat, claim och ack.
 ///
 /// Kommandon som ännu inte är porterade ackas med `success=false` och
@@ -730,6 +737,9 @@ impl Agent {
         // filsynken innan kommandot utfördes, så en konsolrad väntade på hela
         // varvets insamling innan den ens nådde servern.
         let mut any_urgent = false;
+        // Ett utfört kommando har skrivit en svarsrad i konsolen som ska ut
+        // direkt, inte vänta på nästa `CONSOLE_PUSH_SECONDS`-varv.
+        let mut ran_commands = false;
 
         if let Some(mut command) = claim.command {
             // Flera kommandon per varv (2026-11-25): en enda join köar en hel
@@ -763,6 +773,7 @@ impl Agent {
                 }
 
                 executed += 1;
+                ran_commands = true;
                 if executed >= MAX_COMMANDS_PER_TICK {
                     break;
                 }
@@ -772,6 +783,16 @@ impl Agent {
                     None => break,
                 };
             }
+        }
+
+        // Svarsraden direkt till panelen (2026-11-26): förut väntade den på
+        // nästa 1 s-varv, vilket var upp till en sekund av den uppmätta
+        // konsol → panel-tiden (~1,5 s). Posten ligger före rapporten,
+        // filindexet och SFTP-synken, och cursorn flyttas bara när mastern
+        // kvitterat — en tappad post skickas om av nästa varv eller rapport.
+        if ran_commands {
+            tokio::time::sleep(Duration::from_millis(POST_COMMAND_PUSH_DELAY_MS)).await;
+            self.push_console_lines().await;
         }
 
         let report_due = self
