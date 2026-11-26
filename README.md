@@ -84,6 +84,9 @@ the Python agent — no master changes are required to run it side by side.
   moment instead of at the next report. The cursor moves only after the master acknowledges the
   lines, and the 10 s report still carries the same lines, so a dropped push costs one interval
   at most. A master without the endpoint (`404`) turns the fast path off for that run.
+  A tick that executed commands reads and posts the lines immediately instead of waiting for
+  the next second (after a 150 ms pause so the server has printed its reply): the reply to a
+  queued console command reaches the panel without the extra second.
 - **MIGRATIONS** (`migration_prepare`, `migration_stop`, `migration_export`, `migration_import`,
   `migration_commit`, `migration_delete_source`): the destination creates an X25519 keypair and
   keeps the private half in the agent state volume (`0600`); the source archives the server root,
