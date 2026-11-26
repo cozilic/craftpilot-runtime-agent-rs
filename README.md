@@ -76,7 +76,9 @@ the Python agent — no master changes are required to run it side by side.
   from the jar name and minimum size the master lists in `artifacts`, and new console lines from
   `docker logs --timestamps` with a cursor persisted in the state volume (the first report sends a
   400-line backlog; after a restart only new lines are sent).
-  Each report consumes a new sequence number, so the master never sees it as a replay.
+  Each report consumes a new sequence number, so the master never sees it as a replay. A claimed
+  command is executed **before** the report and the file-tree/SFTP sync of the same tick, so the
+  collection never stands between a queued console line and its container.
 - **CONSOLE PUSH** (`servers/{server}/logs`): while a server runs, new console lines are read
   every second and posted on their own, so a join or a chat line reaches the panel within a
   moment instead of at the next report. The cursor moves only after the master acknowledges the
