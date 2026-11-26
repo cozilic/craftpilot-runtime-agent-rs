@@ -337,6 +337,19 @@ impl MasterClient {
 
     /// Masterns önskade SFTP-läge: hela listan med konton, nycklar och
     /// servermappar för den här noden. Lösenord ingår aldrig.
+    /// Nodens tunneläga: hub, token och de egna hubbportarna. Mastern
+    /// allokerar portarna lat och utfärdar token här, så agenten måste
+    /// spara token mellan anrop.
+    pub async fn tunnel_state(&self, node_id: &str) -> Result<crate::tunnel::TunnelState> {
+        self.request(
+            Method::GET,
+            &format!("api/runtime/nodes/{node_id}/tunnel"),
+            None::<&()>,
+            true,
+        )
+        .await
+    }
+
     pub async fn sftp_state(&self, node_id: &str) -> Result<SftpState> {
         self.request(
             Method::GET,

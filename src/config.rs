@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::time::Duration;
 
 use url::Url;
 
@@ -49,6 +50,8 @@ pub struct Config {
     pub max_upload_bytes: u64,
     /// Nodens egen SFTP (docs/RUNTIME-NODE-SFTP.md).
     pub sftp: SftpSettings,
+    /// Portfri anslutning (docs/RUNTIME-NODE-TUNNEL.md).
+    pub tunnel: TunnelSettings,
 }
 
 /// Inställningar för nodens SFTPGo. Mastern äger *vad* som får finnas;
@@ -79,6 +82,28 @@ pub const DEFAULT_SFTP_IMAGE: &str = "drakkan/sftpgo:v2.6.6";
 pub const DEFAULT_SFTP_CONTAINER: &str = "craftpilot-sftpgo";
 pub const DEFAULT_SFTP_ADMIN_USERNAME: &str = "craftpilot-agent";
 
+/// Tunnelklienten (docs/RUNTIME-NODE-TUNNEL.md). Agenten startar frpc som en
+/// barnprocess i sin egen container; mastern äger portarna och nekar allt som
+/// inte är nodens eget.
+#[derive(Debug, Clone)]
+pub struct TunnelSettings {
+    /// `CRAFTPILOT_TUNNEL`. Av som default? Nej: precis som SFTP ska en nod som
+    /// uppgraderas kunna erbjuda tunneln utan en ny installation. Mastern
+    /// svarar `enabled: false` tills ägaren slår på den i panelen.
+    pub enabled: bool,
+    /// frpc-binären. Dockerimagen installerar den pinnade versionen.
+    pub frpc_bin: String,
+    /// Adressen frpc når nodens publicerade portar på inifrån
+    /// agentcontainern. Compose mappar `host.docker.internal` till
+    /// värdens gateway; kör agenten direkt på värden fungerar 127.0.0.1.
+    pub local_host: String,
+    /// Privat katalog för `frpc.toml` och det pinnade CA:t.
+    pub dir: PathBuf,
+    /// Hur ofta masterns tunneläga hämtas. Kort nog att en avstängning
+    /// släpper hubportarna snabbt, långt nog att inte allokera i onödan.
+    pub refresh_interval: Duration,
+}
+
 impl Config {
     /// Minimal konfiguration för agenttesterna: bara masterns adress och
     /// state-katalogen varierar, resten är fasta värden.
@@ -102,6 +127,14 @@ impl Config {
             data_gid: 33,
             max_edit_bytes: 1024 * 1024,
             max_upload_bytes: 4 * 1024 * 1024,
+            // Testerna ska inte starta varken SFTPGo eller frpc.
+            tunnel: TunnelSettings {
+                enabled: false,
+                frpc_bin: "frpc".to_string(),
+                local_host: "host.docker.internal".to_string(),
+                dir: state_dir.join("tunnel"),
+                refresh_interval: Duration::from_secs(10),
+            },
             state_dir,
             // Testerna ska inte starta en riktig SFTPGo; modulerna testas
             // direkt mot en mockad admin-API.
@@ -183,14 +216,37 @@ impl Config {
         let sftp_file_gid = optional_u32("CRAFTPILOT_SFTP_FILE_GID")?;
         let sftp_file_uid = optional_u32("CRAFTPILOT_SFTP_FILE_UID")?;
 
+        let state_dir = PathBuf::from(env_or(
+            "CRAFTPILOT_AGENT_STATE_DIR",
+            "/var/lib/craftpilot-agent",
+        ));
+        let tunnel_enabled = parse_enabled_flag("CRAFTPILOT_TUNNEL", true)?;
+        let frpc_bin = env_or("CRAFTPILOT_FRPC_BIN", "frpc");
+        if frpc_bin.is_empty() || frpc_bin.chars().any(char::is_whitespace) {
+            return Err(AgentError::Config(
+                "CRAFTPILOT_FRPC_BIN must be a binary path without whitespace".into(),
+            ));
+        }
+        let tunnel_local_host = match std::env::var("CRAFTPILOT_TUNNEL_LOCAL_HOST") {
+            Ok(value) if !value.trim().is_empty() => value.trim().to_string(),
+            _ => default_tunnel_local_host(),
+        };
+        if !is_tunnel_host(&tunnel_local_host) {
+            return Err(AgentError::Config(
+                "CRAFTPILOT_TUNNEL_LOCAL_HOST is not a valid host".into(),
+            ));
+        }
+        let tunnel_refresh_seconds = parse_u64("CRAFTPILOT_TUNNEL_REFRESH_SECONDS", 10)?;
+        if !(5..=300).contains(&tunnel_refresh_seconds) {
+            return Err(AgentError::Config(
+                "CRAFTPILOT_TUNNEL_REFRESH_SECONDS must be between 5 and 300".into(),
+            ));
+        }
+
         Ok(Self {
             master_url,
             node_id: optional_env("CRAFTPILOT_NODE_ID"),
             registration_token: optional_env("CRAFTPILOT_REGISTRATION_TOKEN"),
-            state_dir: PathBuf::from(env_or(
-                "CRAFTPILOT_AGENT_STATE_DIR",
-                "/var/lib/craftpilot-agent",
-            )),
             server_data_root,
             // Byggversionen (build.rs), inte Cargo-paketets platshållare.
             agent_version: crate::build_info::AGENT_VERSION.to_string(),
@@ -216,6 +272,14 @@ impl Config {
                 file_uid: sftp_file_uid,
                 file_gid: sftp_file_gid,
                 admin_username: DEFAULT_SFTP_ADMIN_USERNAME.to_string(),
+            },
+            state_dir: state_dir.clone(),
+            tunnel: TunnelSettings {
+                enabled: tunnel_enabled,
+                frpc_bin,
+                local_host: tunnel_local_host,
+                dir: state_dir.join("tunnel"),
+                refresh_interval: Duration::from_secs(tunnel_refresh_seconds),
             },
         })
     }
@@ -365,6 +429,83 @@ fn parse_sftp_admin_url(raw: &str) -> Result<Url> {
     let mut normalized = url.clone();
     normalized.set_path("/");
     Ok(normalized)
+}
+
+/// `CRAFTPILOT_TUNNEL` är en installationsflagga, inte en bool: setup.sh
+/// skriver `enabled`/`disabled`. Booleska värden accepteras också så en
+/// äldre eller egen `.env` fungerar.
+fn parse_enabled_flag(key: &str, default: bool) -> Result<bool> {
+    match std::env::var(key) {
+        Ok(value) if !value.trim().is_empty() => enabled_flag_value(value.trim())
+            .ok_or_else(|| AgentError::Config(format!("{key} must be enabled or disabled"))),
+        _ => Ok(default),
+    }
+}
+
+fn enabled_flag_value(raw: &str) -> Option<bool> {
+    match raw.to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" | "enabled" => Some(true),
+        "0" | "false" | "no" | "off" | "disabled" => Some(false),
+        _ => None,
+    }
+}
+
+fn is_tunnel_host(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 253
+        && value
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '_' | ':'))
+}
+
+/// Adressen frpc använder för att nå nodens publicerade portar. Compose mappar
+/// `host.docker.internal` till värdens gateway, men en äldre compose-fil saknar
+/// raden. Därför läses containerns standardgateway som reserv: den ligger på
+/// samma värd och når samma publicerade portar. Utanför en container är
+/// loopback rätt adress.
+fn default_tunnel_local_host() -> String {
+    if !std::path::Path::new("/.dockerenv").exists() {
+        return "127.0.0.1".to_string();
+    }
+
+    if host_resolves("host.docker.internal") {
+        return "host.docker.internal".to_string();
+    }
+
+    default_gateway().unwrap_or_else(|| "host.docker.internal".to_string())
+}
+
+fn host_resolves(host: &str) -> bool {
+    use std::net::ToSocketAddrs;
+
+    (host, 80)
+        .to_socket_addrs()
+        .map(|mut addresses| addresses.next().is_some())
+        .unwrap_or(false)
+}
+
+fn default_gateway() -> Option<String> {
+    let routes = std::fs::read_to_string("/proc/net/route").ok()?;
+    gateway_from_routes(&routes)
+}
+
+/// `/proc/net/route` skriver gateway som little-endian hex på de arkitekturer
+/// agenten kör på. `Destination` 00000000 är standardrutten och flaggan 0x2 är
+/// RTF_GATEWAY.
+fn gateway_from_routes(routes: &str) -> Option<String> {
+    for line in routes.lines().skip(1) {
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        if fields.len() < 4 || fields[1] != "00000000" {
+            continue;
+        }
+        let flags = u16::from_str_radix(fields[3], 16).ok()?;
+        if flags & 0x2 == 0 {
+            continue;
+        }
+        let raw = u32::from_str_radix(fields[2], 16).ok()?;
+        return Some(std::net::Ipv4Addr::from(raw.to_le_bytes()).to_string());
+    }
+    None
 }
 
 fn optional_u32(key: &str) -> Result<Option<u32>> {
@@ -561,6 +702,33 @@ mod tests {
         ] {
             assert_eq!(sanitize_host_address(raw), None, "{raw} ska avvisas");
         }
+    }
+
+    #[test]
+    fn tunnel_flag_accepts_the_setup_spelling() {
+        assert_eq!(enabled_flag_value("enabled"), Some(true));
+        assert_eq!(enabled_flag_value("disabled"), Some(false));
+        assert_eq!(enabled_flag_value("TRUE"), Some(true));
+        assert_eq!(enabled_flag_value("0"), Some(false));
+        assert_eq!(enabled_flag_value("maybe"), None);
+    }
+
+    #[test]
+    fn a_default_route_gives_the_gateway() {
+        let routes = "Iface\tDestination\tGateway\tFlags\tRefCnt\tUse\tMetric\tMask\n\
+eth0\t00000000\t0101A8C0\t0003\t0\t0\t0\t00000000\n\
+eth0\t0001A8C0\t00000000\t0001\t0\t0\t0\t00FFFFFF\n";
+        assert_eq!(gateway_from_routes(routes).as_deref(), Some("192.168.1.1"));
+        assert_eq!(gateway_from_routes("Iface\tDestination\n"), None);
+    }
+
+    #[test]
+    fn tunnel_local_host_is_a_host() {
+        assert!(is_tunnel_host("host.docker.internal"));
+        assert!(is_tunnel_host("127.0.0.1"));
+        assert!(!is_tunnel_host(""));
+        assert!(!is_tunnel_host("host docker"));
+        assert!(!is_tunnel_host("host\nname"));
     }
 
     #[test]

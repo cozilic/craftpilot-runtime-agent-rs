@@ -15,13 +15,16 @@ ENV_FILE="$INSTALL_DIR/.env"
 
 usage() {
   cat <<'EOF'
-Användning: sudo ./setup.sh
+Användning: sudo ./setup.sh [--tunnel=yes|no]
 
 Skapar och startar en CraftPilot Runtime Agent på den här värden.
 
 Filer:
   compose.yaml   installeras som /opt/craftpilot-agent/compose.yaml
   .env           skapas i /opt/craftpilot-agent/.env om den inte finns
+
+Utan --tunnel frågar installationen om noden ska gå att använda utan att
+några portar öppnas. Svaret sparas som CRAFTPILOT_TUNNEL i .env.
 
 Kör om samma kommando för att hämta senaste imagen och starta om agenten.
 EOF
@@ -36,22 +39,52 @@ fail() {
   exit 1
 }
 
-case "${1:-}" in
-  -h|--help)
-    usage
-    exit 0
-    ;;
-  '')
-    ;;
-  *)
-    fail "okänt argument: $1 (använd --help)"
-    ;;
-esac
+TUNNEL="ask"
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    --tunnel=yes)
+      TUNNEL="yes"
+      ;;
+    --tunnel=no)
+      TUNNEL="no"
+      ;;
+    *)
+      fail "okänt argument: $1 (använd --help)"
+      ;;
+  esac
+  shift
+done
 
 [ -f "$COMPOSE_SRC" ] || fail "compose.yaml saknas bredvid setup.sh"
 command -v docker >/dev/null 2>&1 || fail "Docker saknas. Installera Docker 27 eller senare."
 docker info >/dev/null 2>&1 || fail "kan inte ansluta till Docker. Kör med sudo eller kontrollera Docker-tjänsten."
 docker compose version >/dev/null 2>&1 || fail "Docker Compose saknas. Installera Compose-plugin."
+
+if [ "$TUNNEL" = "ask" ] && [ ! -f "$ENV_FILE" ]; then
+  if [ -t 0 ]; then
+    printf '\nSka noden gå att använda utan att du öppnar några portar? [J/n] '
+    read -r answer || answer=""
+    case "$answer" in
+      [nN]*) TUNNEL="no" ;;
+      *) TUNNEL="yes" ;;
+    esac
+  else
+    # Utan terminal (t.ex. en automatiserad installation) gäller samma
+    # förslag som frågan: ja. Mastern svarar ändå "av" tills ägaren slår på
+    # tunneln i panelen.
+    TUNNEL="yes"
+  fi
+fi
+
+if [ "$TUNNEL" = "yes" ]; then
+  TUNNEL_FLAG="enabled"
+else
+  TUNNEL_FLAG="disabled"
+fi
 
 log "skapar kataloger"
 mkdir -p "$INSTALL_DIR" "$DATA_DIR" || fail "kunde inte skapa $INSTALL_DIR eller $DATA_DIR. Kör med sudo."
@@ -69,6 +102,7 @@ CRAFTPILOT_MASTER_URL=https://craftpilot.se
 CRAFTPILOT_SERVER_DATA_ROOT=$DATA_DIR
 CRAFTPILOT_DOCKER_SERVER_DATA_ROOT=$DATA_DIR
 CRAFTPILOT_POLL_SECONDS=5
+CRAFTPILOT_TUNNEL=$TUNNEL_FLAG
 RUST_LOG=info
 EOF
   chmod 600 "$ENV_FILE"
@@ -91,6 +125,8 @@ ensure_env CRAFTPILOT_MASTER_URL "https://craftpilot.se"
 ensure_env CRAFTPILOT_SERVER_DATA_ROOT "$DATA_DIR"
 ensure_env CRAFTPILOT_DOCKER_SERVER_DATA_ROOT "$DATA_DIR"
 ensure_env CRAFTPILOT_POLL_SECONDS "5"
+# En äldre .env får tunnelns standardvärde; ett eget värde skrivs aldrig över.
+ensure_env CRAFTPILOT_TUNNEL "enabled"
 ensure_env RUST_LOG "info"
 
 if [ ! -f "$INSTALL_DIR/compose.yaml" ]; then

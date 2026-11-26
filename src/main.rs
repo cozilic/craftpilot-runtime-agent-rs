@@ -19,6 +19,7 @@ mod state;
 mod telemetry;
 #[cfg(test)]
 mod test_master;
+mod tunnel;
 
 use tracing::error;
 use tracing_subscriber::EnvFilter;

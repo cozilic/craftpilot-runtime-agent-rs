@@ -16,6 +16,10 @@ services:
         source: ${CRAFTPILOT_HOST_DATA_DIR:?set CRAFTPILOT_HOST_DATA_DIR in .env.desktop}
         target: /srv/craftpilot/servers
       - agent_state:/var/lib/craftpilot-agent
+    # Docker Desktop löser host.docker.internal själv; raden gör samma sak
+    # på Linux och dokumenterar varför frpc använder namnet.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     networks:
       - craftpilot-servers
 
