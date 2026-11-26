@@ -45,6 +45,28 @@ const CONSOLE_PUSH_SECONDS: u64 = 1;
 /// nästa sekundvarv.
 const POST_COMMAND_PUSH_DELAY_MS: u64 = 150;
 
+/// Tak för varvets periodiska svans: telemetrirapporten (en `docker logs`,
+/// en stats- och en diskwalk per server), filindexets delta och SFTP-synken.
+///
+/// Svansen låg i samma serialiserade varv som konsolvägen, utan tak. Ett enda
+/// långsamt steg — en `docker logs` som hinner nå sin 20 s-timeout, en
+/// diskwalk över en stor värld eller en SFTPGo som inte svarar — höll då BÅDA
+/// konsolvägarna gisslan: nya rader nådde panelen och köade kommandon nådde
+/// servern först när hela varvet var klart (rapporterat som "upp mot 20
+/// sekunder ibland", 2026-11-26). Budgeten är ett tak, inte en garanti: ett
+/// steg som inte hinner klart loggas och görs om nästa varv.
+const MAINTENANCE_BUDGET_SECONDS: u64 = 6;
+
+/// En 404 på den snabba loggrutten stängde tidigare av vägen för resten av
+/// processens livstid. En deploy kan svara 404 en kort stund, och då blev
+/// noden kvar på 10 s-rapporten tills den startades om. Nu provas vägen igen
+/// efter den här tiden.
+const CONSOLE_PUSH_RETRY_SECONDS: u64 = 60;
+
+/// Konsolraderna trycks ut före och efter svansen, men inte tätare än så här:
+/// 1 s-varvet äger den vanliga kadensen.
+const CONSOLE_PUSH_MIN_INTERVAL_MS: u64 = 900;
+
 /// Etapp 1 av Rust-agenten: enrollment, heartbeat, claim och ack.
 ///
 /// Kommandon som ännu inte är porterade ackas med `success=false` och
@@ -71,6 +93,12 @@ pub struct Agent {
     online_servers: BTreeSet<String>,
     /// Avstängd när mastern inte har den snabba loggrutten (äldre master).
     console_push: bool,
+    /// När en avstängd snabb väg får provas igen
+    /// (`CONSOLE_PUSH_RETRY_SECONDS`); `None` = aldrig avstängd.
+    console_push_retry_at: Option<Instant>,
+    /// Senaste konsolposten — svansen trycker bara ut rader som inte redan
+    /// gått ut med 1 s-varvet.
+    last_console_push: Option<Instant>,
     last_file_tree_progress: Option<String>,
     started_at: Instant,
     /// Push-signalen från nodens Reverb-kanal: väcker kommandoloopet så att
@@ -132,6 +160,8 @@ impl Agent {
             assigned_servers: BTreeSet::new(),
             online_servers: BTreeSet::new(),
             console_push: true,
+            console_push_retry_at: None,
+            last_console_push: None,
             last_file_tree_progress: None,
             started_at: Instant::now(),
             wake: Arc::new(tokio::sync::Notify::new()),
@@ -574,8 +604,16 @@ impl Agent {
     /// reserv. En master utan rutten stänger av den här vägen helt.
     async fn push_console_lines(&mut self) {
         if !self.console_push {
-            return;
+            if !console_push_allowed(false, self.console_push_retry_at, Instant::now()) {
+                return;
+            }
+            // Ett 404 mitt i en deploy är inte samma sak som en master utan
+            // rutten: prova igen, och stäng av på nytt om svaret är 404.
+            self.console_push = true;
+            self.console_push_retry_at = None;
         }
+        self.last_console_push = Some(Instant::now());
+        let started = Instant::now();
         let Some(node_id) = self.store.state().node_id.clone() else {
             return;
         };
@@ -632,6 +670,7 @@ impl Agent {
                 // sekund. Rapporten bär raderna som förut.
                 Err(AgentError::Rejected { status: 404, .. }) => {
                     self.console_push = false;
+                    self.console_push_retry_at = Some(Instant::now());
                     debug!(
                         "the master has no direct console endpoint; the report carries the lines"
                     );
@@ -642,6 +681,31 @@ impl Agent {
                 }
             }
         }
+
+        // En långsam post syns i loggen med sin tid: en hängd `docker logs`
+        // eller ett mastersvar som dröjer är annars osynligt bakom nästa
+        // till synes normala rad.
+        let elapsed = started.elapsed();
+        if elapsed >= Duration::from_secs(2) {
+            warn!(
+                elapsed_ms = elapsed.as_millis() as u64,
+                "pushing console lines took long"
+            );
+        }
+    }
+
+    /// Konsolraderna före/efter ett långsamt steg i varvet. Utan det här låg
+    /// 1 s-posten bakom hela svansen, så en chattrad kunde stå oupptäckt i
+    /// tiotals sekunder på en nod med en stor värld.
+    async fn push_console_lines_if_due(&mut self) {
+        if self
+            .last_console_push
+            .is_some_and(|at| at.elapsed() < Duration::from_millis(CONSOLE_PUSH_MIN_INTERVAL_MS))
+        {
+            return;
+        }
+
+        self.push_console_lines().await;
     }
 
     /// Ett varv med samma återhämtning som förut: en avvisad credential
@@ -798,19 +862,45 @@ impl Agent {
         let report_due = self
             .last_report
             .is_none_or(|at| at.elapsed() >= Duration::from_secs(TELEMETRY_SECONDS));
+        // Nya konsolrader ut FÖRE svansen: en chattrad som kom under förra
+        // varvet ska inte vänta på telemetrin.
+        self.push_console_lines_if_due().await;
+
         // Ett livscykelkommando flyttar statusen, så panelen ska se den direkt
         // även när 10 s-fönstret inte gått ut.
-        let assigned = if report_due || any_urgent {
-            self.report_servers().await
-        } else {
-            self.assigned_servers.clone()
+        //
+        // Hela svansen har en hård budget (2026-11-26). Den låg i samma
+        // serialiserade varv som claim, utförande och konsolpost, utan tak: en
+        // långsam `docker logs`, en diskwalk över en stor värld eller en
+        // SFTPGo som inte svarar fördröjde då både rader till panelen och
+        // kommandon till servern med upp till tiotals sekunder. Ett avbrutet
+        // steg är ofarligt (rapporten, filsynken och SFTP-state görs om nästa
+        // varv) och loggas, så en verkligt långsam nod syns i stället för att
+        // bara kännas.
+        let maintenance = async {
+            if report_due || any_urgent {
+                self.report_servers().await;
+            }
+            let assigned = self.assigned_servers.clone();
+            self.file_tree.set_assigned(&assigned);
+            self.sync_file_tree(&assigned).await;
+            // SFTP-state synkas efter kommandot: nästa claim bär `sftp` och
+            // värdnyckeln så snart SFTPGo svarar. Fel här stoppar aldrig
+            // kommandoflödet — panelen slutar bara lova SFTP-slutpunkten.
+            self.refresh_sftp().await;
         };
-        self.file_tree.set_assigned(&assigned);
-        self.sync_file_tree(&assigned).await;
-        // SFTP-state synkas efter kommandot: nästa claim bär `sftp` och
-        // värdnyckeln så snart SFTPGo svarar. Fel här stoppar aldrig
-        // kommandoflödet — panelen slutar bara lova SFTP-slutpunkten.
-        self.refresh_sftp().await;
+        match tokio::time::timeout(Duration::from_secs(MAINTENANCE_BUDGET_SECONDS), maintenance)
+            .await
+        {
+            Ok(()) => {}
+            Err(_) => warn!(
+                budget_seconds = MAINTENANCE_BUDGET_SECONDS,
+                "the maintenance round ran out of budget; the console paths keep their own cadence"
+            ),
+        }
+
+        // Och en gång efter: rader som skrevs medan svansen körde.
+        self.push_console_lines_if_due().await;
 
         Ok(())
     }
@@ -1597,6 +1687,19 @@ fn needs_new_credential(err: &AgentError) -> bool {
     matches!(err, AgentError::Unauthorized)
 }
 
+/// Får den snabba loggvägen köras? En väg som stängts av efter 404 provas
+/// igen efter `CONSOLE_PUSH_RETRY_SECONDS`, så en deploy inte lämnar noden på
+/// 10 s-rapporten till nästa omstart.
+fn console_push_allowed(enabled: bool, retry_at: Option<Instant>, now: Instant) -> bool {
+    if enabled {
+        return true;
+    }
+
+    retry_at.is_none_or(|at| {
+        now.saturating_duration_since(at) >= Duration::from_secs(CONSOLE_PUSH_RETRY_SECONDS)
+    })
+}
+
 /// Sekunder sedan epoch. Används för att mäta väntetiden efter en avvisad
 /// anmälan; någon kronometer behövs inte i state-filen.
 fn unix_seconds() -> u64 {
@@ -1685,10 +1788,11 @@ fn deletable_server_data(root: &Path, server_id: &str) -> Result<Option<PathBuf>
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
+    use std::time::{Duration, Instant};
 
     use super::{
-        deletable_server_data, insert_network_counters, needs_new_credential, sha256_hex,
-        unix_seconds, Agent,
+        console_push_allowed, deletable_server_data, insert_network_counters, needs_new_credential,
+        sha256_hex, unix_seconds, Agent, CONSOLE_PUSH_RETRY_SECONDS,
     };
     use crate::config::Config;
     use crate::error::AgentError;
@@ -2050,5 +2154,27 @@ mod tests {
         assert_eq!(digest.len(), 64);
         assert!(digest.chars().all(|ch| ch.is_ascii_hexdigit()));
         assert_ne!(digest, sha256_hex("say hello "));
+    }
+
+    /// En 404 stänger av den snabba konsolvägen i en minut — inte för all
+    /// framtid. Utan omförsöket låg en nod kvar på 10 s-rapporten efter en
+    /// deploy som tillfälligt svarade 404.
+    #[test]
+    fn the_fast_console_path_is_retried_after_a_404() {
+        let now = Instant::now();
+
+        assert!(console_push_allowed(true, None, now));
+        // Avstängd utan tidigare försök (t.ex. efter en omstart): prova.
+        assert!(console_push_allowed(false, None, now));
+        assert!(!console_push_allowed(
+            false,
+            Some(now - Duration::from_secs(5)),
+            now
+        ));
+        assert!(console_push_allowed(
+            false,
+            Some(now - Duration::from_secs(CONSOLE_PUSH_RETRY_SECONDS)),
+            now
+        ));
     }
 }
