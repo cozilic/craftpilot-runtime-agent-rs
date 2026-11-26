@@ -22,6 +22,7 @@ use crate::sftp::SftpService;
 use crate::snapshot::Snapshotter;
 use crate::state::StateStore;
 use crate::telemetry::{Artifact, Reporter};
+use crate::tunnel::TunnelService;
 
 /// Hur ofta servertelemetrin (inkl. loggrader) skickas. Regelgrinden och
 /// chatt-triggers läser spelarens join-/chattrader därifrån, så kadensen är
@@ -85,6 +86,9 @@ pub struct Agent {
     /// Nodens egen SFTPGo. `None` när funktionen är avstängd med
     /// `CRAFTPILOT_SFTP_ENABLED=false`; agenten rapporterar då aldrig `sftp`.
     sftp: Option<SftpService>,
+    /// Nodens tunnelklient (frpc). `None` när `CRAFTPILOT_TUNNEL=disabled`;
+    /// agenten rapporterar då aldrig `tunnel`.
+    tunnel: Option<TunnelService>,
     reporter: Reporter,
     last_report: Option<Instant>,
     assigned_servers: BTreeSet<String>,
@@ -116,6 +120,11 @@ impl Agent {
         let sftp = if cfg.sftp.enabled {
             let password = ensure_sftp_admin_password(&mut store)?;
             Some(SftpService::new(&cfg, password)?)
+        } else {
+            None
+        };
+        let tunnel = if cfg.tunnel.enabled {
+            Some(TunnelService::new(cfg.tunnel.clone()))
         } else {
             None
         };
@@ -155,6 +164,7 @@ impl Agent {
             file_tree,
             migrations,
             sftp,
+            tunnel,
             reporter: Reporter::new(),
             last_report: None,
             assigned_servers: BTreeSet::new(),
@@ -172,6 +182,7 @@ impl Agent {
 
     pub async fn run(mut self) -> Result<()> {
         self.remove_disabled_sftp().await;
+        self.remove_disabled_tunnel()?;
         self.file_tree.start();
         self.start_session().await?;
         self.main_loop().await
@@ -570,6 +581,7 @@ impl Agent {
                 result = tokio::signal::ctrl_c() => {
                     result?;
                     info!("shutdown requested");
+                    self.shutdown_tunnel().await;
                     return Ok(());
                 }
                 _ = tokio::time::sleep_until(next_tick) => {
@@ -763,10 +775,10 @@ impl Agent {
             .node_id
             .clone()
             .ok_or(AgentError::Unauthorized)?;
-        // Förmågorna från förra pollens SFTP-synk. En långsam första
-        // image-pull får aldrig fördröja ett redan claimat kommando, så
-        // själva synken körs efter kommandot i stället.
-        let capabilities = self.sftp_capabilities();
+        // Förmågorna från förra pollens SFTP- och tunnelsynk. En långsam
+        // första image-pull får aldrig fördröja ett redan claimat kommando,
+        // så själva synken körs efter kommandot i stället.
+        let capabilities = self.capabilities();
 
         let sequence = self.store.next_sequence()?;
         let claim = self
@@ -888,6 +900,9 @@ impl Agent {
             // värdnyckeln så snart SFTPGo svarar. Fel här stoppar aldrig
             // kommandoflödet — panelen slutar bara lova SFTP-slutpunkten.
             self.refresh_sftp().await;
+            // Tunneläget hämtas efter SFTP:n: mastern äger portarna och
+            // `features: ["tunnel"]` rapporteras först när hubben svarat.
+            self.refresh_tunnel().await;
         };
         match tokio::time::timeout(Duration::from_secs(MAINTENANCE_BUDGET_SECONDS), maintenance)
             .await
@@ -931,7 +946,7 @@ impl Agent {
     /// sekvensräknare, samma lease och samma `node_settings`-hantering. Bara
     /// kommandot returneras — telemetrin ägs av varvet, inte av kön.
     async fn claim_next(&mut self, node_id: &str) -> Result<Option<Command>> {
-        let capabilities = self.sftp_capabilities();
+        let capabilities = self.capabilities();
         let sequence = self.store.next_sequence()?;
         let claim = self
             .api
@@ -1607,6 +1622,17 @@ impl Agent {
         assigned
     }
 
+    /// Förmågorna som följer med heartbeat/claim. SFTP:s port och
+    /// fingeravtryck kommer från SFTP-synken; `tunnel` bara när hubben har
+    /// bekräftat proxyn och frpc fortfarande lever.
+    fn capabilities(&self) -> NodeCapabilities {
+        let mut capabilities = self.sftp_capabilities();
+        if let Some(tunnel) = self.tunnel.as_ref() {
+            capabilities.features.extend(tunnel.capabilities().features);
+        }
+        capabilities
+    }
+
     /// Det förra pollens SFTP-synk kom fram till. Utan tjänst (avstängd
     /// eller första pollen ännu inte körd) rapporteras inga förmågor.
     fn sftp_capabilities(&self) -> NodeCapabilities {
@@ -1635,6 +1661,43 @@ impl Agent {
                 NodeCapabilities::default()
             }
         }
+    }
+
+    /// Hämtar nodens tunneläga och uppdaterar frpc. Ett fel loggas och
+    /// degraderar tjänsten; nästa varv försöker igen. Tidsgränsen håller
+    /// tunnelanropet inom underhållsbudgeten så kommandoloopet inte fastnar.
+    async fn refresh_tunnel(&mut self) {
+        let Some(node_id) = self.store.state().node_id.clone() else {
+            return;
+        };
+        let Some(tunnel) = self.tunnel.as_mut() else {
+            return;
+        };
+        match tokio::time::timeout(
+            Duration::from_secs(4),
+            tunnel.refresh(&node_id, &self.api, &mut self.store),
+        )
+        .await
+        {
+            Ok(Ok(())) => {}
+            Ok(Err(err)) => warn!(error = %err, "node tunnel is unavailable"),
+            Err(_) => warn!("refreshing the node tunnel timed out"),
+        }
+    }
+
+    async fn shutdown_tunnel(&mut self) {
+        if let Some(tunnel) = self.tunnel.as_mut() {
+            tunnel.shutdown().await;
+        }
+    }
+
+    /// Tar bort en kvarlämnad frpc-konfiguration (med token) när tunneln är
+    /// avstängd i miljön. Katalogen lämnas; den är privat och tom.
+    fn remove_disabled_tunnel(&mut self) -> Result<()> {
+        if self.cfg.tunnel.enabled {
+            return Ok(());
+        }
+        crate::tunnel::remove_leftovers(&self.cfg.tunnel, &mut self.store)
     }
 
     fn forget_credential(&mut self) -> Result<()> {

@@ -146,6 +146,14 @@ the Python agent — no master changes are required to run it side by side.
   Ed25519 host key, so the fingerprint in the panel is the same one every client sees — a
   client that would otherwise negotiate RSA cannot show a different value. The admin API is
   never published — only the SFTP port is.
+- **PORT-FREE TUNNEL** (`features: ["tunnel"]`): when the owner enables the tunnel in the
+  panel, the agent fetches `GET /api/runtime/nodes/{node}/tunnel`, pins the hub CA by
+  SHA-256 and runs the bundled `frpc` as a child process. The proxies are exactly the node's
+  own servers and SFTP; the master's plugin rejects any other user or port. The tunnel token
+  is written only to the private state file (0600) and reused until the master rotates it.
+  `tunnel` is advertised only after the hub reports `up` and frpc is still running. Disabling
+  the tunnel (`CRAFTPILOT_TUNNEL=disabled`, or the panel switch) stops frpc and removes its
+  config, so the hub ports are released instead of being held by a stale client.
 - **Bounded container logs**: every game container runs with the Docker `json-file` driver
   capped at 10 MiB × 5 files, so a chatty server can no longer fill the node's disk. Console
   delivery still uses a timestamp cursor and keeps its 400-line window.
@@ -192,7 +200,11 @@ A download larger than `CRAFTPILOT_MAX_UPLOAD_BYTES` is refused before anything 
 | `CRAFTPILOT_SFTP_CONTAINER` | `craftpilot-sftpgo` | Container name. Config and home/data live in the volumes `<name>-config` and `<name>-data`. |
 | `CRAFTPILOT_SFTP_FILE_UID` | owner of `<data root>/<server uuid>` | Owner of files SFTPGo creates. Derived from the server directory so the game container can write them on any node; set it only to override a node with unusual ownership. |
 | `CRAFTPILOT_SFTP_FILE_GID` | owner of `<data root>/<server uuid>` | Group of files SFTPGo creates (same derivation and override). Fallback is `33` when no unix owner can be read. |
-| `RUST_LOG` | `info` | Log filter. Console text, credentials and RCON passwords are never logged. |
+| `CRAFTPILOT_TUNNEL` | `enabled` | Runs the port-free tunnel client (see [Node tunnel](#node-tunnel)). `setup.sh` asks before writing it; `disabled` stops frpc and removes its config. The master still answers `enabled: false` until the owner turns the tunnel on in the panel. |
+| `CRAFTPILOT_FRPC_BIN` | `frpc` | frpc binary. The image installs the pinned frp 0.72.0 release (Apache-2.0); override only for a custom build. |
+| `CRAFTPILOT_TUNNEL_LOCAL_HOST` | auto | Host frpc forwards to. In a container the agent prefers `host.docker.internal` (the compose files map it to the host gateway) and otherwise uses the container's default gateway, which reaches the same published ports. Outside a container it uses `127.0.0.1`. |
+| `CRAFTPILOT_TUNNEL_REFRESH_SECONDS` | `10` | How often the tunnel state is fetched, 5–300. Short enough that disabling the tunnel releases the hub ports quickly. |
+| `RUST_LOG` | `info` | Log filter. Console text, credentials, tunnel tokens and RCON passwords are never logged. |
 
 There is no built-in master default: a bare `docker run` without
 `CRAFTPILOT_MASTER_URL` exits with a configuration error instead of enrolling against
@@ -262,6 +274,34 @@ agent to re-provision SFTPGo:
 docker rm -f craftpilot-sftpgo
 docker volume rm craftpilot-sftpgo-config craftpilot-sftpgo-data
 ```
+
+## Node tunnel
+
+The master owns the hub and the port allocation; the agent only publishes the node's own
+servers and SFTP through it (`docs/RUNTIME-NODE-TUNNEL.md` in the CraftPilot repository).
+
+`GET /api/runtime/nodes/{node}/tunnel` is the whole contract: hub address, TLS name, the
+node's user, a short-lived token, the hub CA and the exact proxies. The agent:
+
+1. verifies `ca_sha256` against the delivered PEM and writes it to its private state
+   directory (0700, files 0600) before frpc starts;
+2. stores the token in `state.json` and keeps using it when the master returns `null`
+   (the token is only sent on issue/rotation);
+3. renders `frpc.toml` with `transport.tls.trustedCaFile`/`serverName`, sends the token as
+   `metadatas.tunnel_token`, and forwards each proxy to `CRAFTPILOT_TUNNEL_LOCAL_HOST` and
+   the port from the master;
+4. restarts frpc only when the hub, token, CA or proxy list changes;
+5. advertises `features: ["tunnel"]` only when the last state was `up` and the child is
+   alive, so a refused or crashed client never leaves a working-looking endpoint in the
+   panel.
+
+When the owner turns the tunnel off, the master clears the token and releases the ports.
+The agent stops frpc on its next refresh and deletes the token and config, so a port that is
+handed to another node is not held by the old client. A master without the route (404) or a
+hub without a CA (503) is treated the same way: no frpc, no `tunnel` feature.
+
+The image bundles frp 0.72.0 (verified against the release SHA-256 for amd64 and arm64) so
+the client and the master's pinned hub speak the same protocol.
 
 ## Run locally
 

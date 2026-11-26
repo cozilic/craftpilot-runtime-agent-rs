@@ -11,6 +11,10 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
       - /srv/craftpilot/servers:/srv/craftpilot/servers
       - agent_state:/var/lib/craftpilot-agent
+    # frpc når nodens publicerade portar via värden; på Linux finns inte
+    # host.docker.internal förrän den mappas hit.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     networks:
       - craftpilot-servers
 

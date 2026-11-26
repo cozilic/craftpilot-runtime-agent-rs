@@ -53,6 +53,12 @@ pub struct AgentState {
     /// användarlösenordet skrivs aldrig hit.
     #[serde(default)]
     pub sftp_passwords: BTreeMap<String, SftpPasswordState>,
+    /// Tunnelns token (docs/RUNTIME-NODE-TUNNEL.md). Mastern lämnar den bara
+    /// när den utfärdas eller roteras, så agenten måste spara den mellan
+    /// omstarter. Den skrivs bara till den privata state-filen (0600) och
+    /// aldrig till loggen. Rensas när tunneln stängs av.
+    #[serde(default)]
+    pub tunnel_token: Option<String>,
 }
 
 /// Ett kontos lösenordsläge på noden. `revision` är masterns nummer för det
@@ -285,6 +291,24 @@ mod tests {
 
         let mut reloaded = StateStore::open(&dir).unwrap();
         assert_eq!(reloaded.next_sequence().unwrap(), 3);
+
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn tunnel_token_survives_a_restart() {
+        let dir = temporary_dir("tunnel-token");
+        let mut store = StateStore::open(&dir).unwrap();
+        store.state_mut().tunnel_token = Some("a".repeat(64));
+        store.save().unwrap();
+        drop(store);
+
+        let expected = "a".repeat(64);
+        let reloaded = StateStore::open(&dir).unwrap();
+        assert_eq!(
+            reloaded.state().tunnel_token.as_deref(),
+            Some(expected.as_str())
+        );
 
         fs::remove_dir_all(&dir).unwrap();
     }
