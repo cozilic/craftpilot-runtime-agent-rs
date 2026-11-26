@@ -234,7 +234,7 @@ dependencies = [
 
 [[package]]
 name = "craftpilot-runtime-agent"
-version = "0.16.0"
+version = "0.16.1"
 dependencies = [
  "aes-gcm",
  "base64 0.22.1",
