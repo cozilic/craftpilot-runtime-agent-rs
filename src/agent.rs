@@ -724,68 +724,68 @@ impl Agent {
         // oupptäckt i en halv minut innan prompten ens köades. Kadensen är
         // avvägd mot kostnaden: en `docker logs` och en stats-läsning per
         // server och varv.
+        // Kommandot FÖRST (2026-11-26): claim-svaret är redan hämtat, och
+        // telemetrin (docker logs, stats, filindex, SFTP-synk) får aldrig
+        // ligga framför ett köat kommando. Förut kördes rapporten och
+        // filsynken innan kommandot utfördes, så en konsolrad väntade på hela
+        // varvets insamling innan den ens nådde servern.
+        let mut any_urgent = false;
+
+        if let Some(mut command) = claim.command {
+            // Flera kommandon per varv (2026-11-25): en enda join köar en hel
+            // kedja (prompt, spelläge, interaktionslås, teleport, markör). Ett
+            // kommando per poll gjorde att sista steget kom flera tiotal sekunder
+            // efter prompten — spelaren hann gå iväg innan låset ens satts.
+            // Kön claimas i ordning, så agenten tömmer den tills den är tom eller
+            // taket nås; lease och ack är oförändrade.
+            let mut executed = 0usize;
+
+            loop {
+                info!(
+                    command_id = %command.id,
+                    command_type = %command.command_type,
+                    "claimed a command"
+                );
+
+                let ack = self.execute(&command).await;
+                let result = self.api.acknowledge(&node_id, &command.id, &ack).await;
+                any_urgent |= matches!(
+                    command.command_type.as_str(),
+                    "start" | "stop" | "cancel_start" | "delete_server" | "migration_stop"
+                );
+
+                match result {
+                    Ok(_) => {}
+                    Err(AgentError::Conflict(body)) => {
+                        warn!(command_id = %command.id, error = %body, "lease expired before the acknowledge");
+                    }
+                    Err(err) => return Err(err),
+                }
+
+                executed += 1;
+                if executed >= MAX_COMMANDS_PER_TICK {
+                    break;
+                }
+
+                command = match self.claim_next(&node_id).await? {
+                    Some(next) => next,
+                    None => break,
+                };
+            }
+        }
+
         let report_due = self
             .last_report
             .is_none_or(|at| at.elapsed() >= Duration::from_secs(TELEMETRY_SECONDS));
-        let assigned = if report_due {
+        // Ett livscykelkommando flyttar statusen, så panelen ska se den direkt
+        // även när 10 s-fönstret inte gått ut.
+        let assigned = if report_due || any_urgent {
             self.report_servers().await
         } else {
             self.assigned_servers.clone()
         };
         self.file_tree.set_assigned(&assigned);
         self.sync_file_tree(&assigned).await;
-
-        let Some(command) = claim.command else {
-            self.refresh_sftp().await;
-            return Ok(());
-        };
-
-        // Flera kommandon per varv (2026-11-25): en enda join köar en hel
-        // kedja (prompt, spelläge, interaktionslås, teleport, markör). Ett
-        // kommando per poll gjorde att sista steget kom flera tiotal sekunder
-        // efter prompten — spelaren hann gå iväg innan låset ens satts.
-        // Kön claimas i ordning, så agenten tömmer den tills den är tom eller
-        // taket nås; lease och ack är oförändrade.
-        let mut command = command;
-        let mut executed = 0usize;
-        let mut any_urgent = false;
-
-        loop {
-            info!(
-                command_id = %command.id,
-                command_type = %command.command_type,
-                "claimed a command"
-            );
-
-            let ack = self.execute(&command).await;
-            let result = self.api.acknowledge(&node_id, &command.id, &ack).await;
-            any_urgent |= matches!(
-                command.command_type.as_str(),
-                "start" | "stop" | "cancel_start" | "delete_server" | "migration_stop"
-            );
-
-            match result {
-                Ok(_) => {}
-                Err(AgentError::Conflict(body)) => {
-                    warn!(command_id = %command.id, error = %body, "lease expired before the acknowledge");
-                }
-                Err(err) => return Err(err),
-            }
-
-            executed += 1;
-            if executed >= MAX_COMMANDS_PER_TICK {
-                break;
-            }
-
-            command = match self.claim_next(&node_id).await? {
-                Some(next) => next,
-                None => break,
-            };
-        }
-
-        if any_urgent && !report_due {
-            self.report_servers().await;
-        }
         // SFTP-state synkas efter kommandot: nästa claim bär `sftp` och
         // värdnyckeln så snart SFTPGo svarar. Fel här stoppar aldrig
         // kommandoflödet — panelen slutar bara lova SFTP-slutpunkten.
