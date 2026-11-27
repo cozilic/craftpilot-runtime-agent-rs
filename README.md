@@ -291,14 +291,16 @@ node's user, a short-lived token, the hub CA and the exact proxies. The agent:
    `metadatas.tunnel_token`, and forwards each proxy to `CRAFTPILOT_TUNNEL_LOCAL_HOST` and
    the port from the master;
 4. restarts frpc only when the hub, token, CA or proxy list changes;
-5. advertises `features: ["tunnel"]` only when the last state was `up` and the child is
-   alive, so a refused or crashed client never leaves a working-looking endpoint in the
-   panel.
+5. reports `features: ["tunnel"]` as soon as the client is enabled, before the hub has
+   confirmed the proxy, and `tunnel-disabled` when `CRAFTPILOT_TUNNEL=disabled` — so the
+   panel can tell a connecting client from one that is disabled or absent. `up` itself is
+   still owned by the master and never assumed by the agent.
 
 When the owner turns the tunnel off, the master clears the token and releases the ports.
 The agent stops frpc on its next refresh and deletes the token and config, so a port that is
 handed to another node is not held by the old client. A master without the route (404) or a
-hub without a CA (503) is treated the same way: no frpc, no `tunnel` feature.
+hub without a CA (503) is treated the same way: frpc is stopped, and the master's
+`tunnel_state`/`tunnel_error` shows the failure instead of a working-looking endpoint.
 
 The image bundles frp 0.72.0 (verified against the release SHA-256 for amd64 and arm64) so
 the client and the master's pinned hub speak the same protocol.

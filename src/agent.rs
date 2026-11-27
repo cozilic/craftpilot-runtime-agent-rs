@@ -87,7 +87,7 @@ pub struct Agent {
     /// `CRAFTPILOT_SFTP_ENABLED=false`; agenten rapporterar då aldrig `sftp`.
     sftp: Option<SftpService>,
     /// Nodens tunnelklient (frpc). `None` när `CRAFTPILOT_TUNNEL=disabled`;
-    /// agenten rapporterar då aldrig `tunnel`.
+    /// agenten rapporterar då `tunnel-disabled` i stället för `tunnel`.
     tunnel: Option<TunnelService>,
     reporter: Reporter,
     last_report: Option<Instant>,
@@ -900,8 +900,8 @@ impl Agent {
             // värdnyckeln så snart SFTPGo svarar. Fel här stoppar aldrig
             // kommandoflödet — panelen slutar bara lova SFTP-slutpunkten.
             self.refresh_sftp().await;
-            // Tunneläget hämtas efter SFTP:n: mastern äger portarna och
-            // `features: ["tunnel"]` rapporteras först när hubben svarat.
+            // Tunneläget hämtas efter SFTP:n: mastern äger portarna, och
+            // klientens närvaro rapporteras redan innan hubben svarat `up`.
             self.refresh_tunnel().await;
         };
         match tokio::time::timeout(Duration::from_secs(MAINTENANCE_BUDGET_SECONDS), maintenance)
@@ -1623,13 +1623,14 @@ impl Agent {
     }
 
     /// Förmågorna som följer med heartbeat/claim. SFTP:s port och
-    /// fingeravtryck kommer från SFTP-synken; `tunnel` bara när hubben har
-    /// bekräftat proxyn och frpc fortfarande lever.
+    /// fingeravtryck kommer från SFTP-synken; `tunnel` säger att klienten
+    /// finns och är påslagen, inte att hubben redan bekräftat proxyn — det
+    /// läget ägs av mastern och syns i panelen som `tunnel_state`.
     fn capabilities(&self) -> NodeCapabilities {
         let mut capabilities = self.sftp_capabilities();
-        if let Some(tunnel) = self.tunnel.as_ref() {
-            capabilities.features.extend(tunnel.capabilities().features);
-        }
+        capabilities
+            .features
+            .extend(crate::tunnel::capability_features(self.cfg.tunnel.enabled));
         capabilities
     }
 
