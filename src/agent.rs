@@ -1631,6 +1631,13 @@ impl Agent {
         capabilities
             .features
             .extend(crate::tunnel::capability_features(self.cfg.tunnel.enabled));
+        // Mastern äger token: en klient som saknar den kan bara lösas genom
+        // att mastern roterar den, så läget rapporteras i hjärtat/claimen
+        // (2026-11-27) i stället för att vänta ut TTL:en.
+        capabilities.tunnel_token_missing = self
+            .tunnel
+            .as_ref()
+            .is_some_and(TunnelService::token_missing);
         capabilities
     }
 

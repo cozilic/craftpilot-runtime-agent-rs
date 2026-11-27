@@ -142,6 +142,11 @@ pub struct NodeCapabilities {
     /// Värdporten nodens SFTPGo publicerades på. `None` när tjänsten inte
     /// svarar; då utelämnas fältet så masterns sparade värde står kvar.
     pub bound_port: Option<u16>,
+    /// Mastern vill ha en tunnel men agenten har ingen token att använda
+    /// (2026-11-27), t.ex. efter att state-katalogen rensats. Bara mastern kan
+    /// utfärda en ny, så rapporten får den att rotera i stället för att noden
+    /// väntar ut TTL:en. Fältet skickas bara när det är sant.
+    pub tunnel_token_missing: bool,
 }
 
 #[derive(Debug, Serialize)]

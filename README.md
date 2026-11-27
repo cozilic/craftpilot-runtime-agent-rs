@@ -150,7 +150,10 @@ the Python agent — no master changes are required to run it side by side.
   panel, the agent fetches `GET /api/runtime/nodes/{node}/tunnel`, pins the hub CA by
   SHA-256 and runs the bundled `frpc` as a child process. The proxies are exactly the node's
   own servers and SFTP; the master's plugin rejects any other user or port. The tunnel token
-  is written only to the private state file (0600) and reused until the master rotates it.
+  is written only to the private state file (0600) and reused until the master rotates it. An
+  agent that has no token at all — for example after its state directory was wiped — reports
+  `tunnel_token_missing` in heartbeat/claim, so the master reissues one on the next poll instead
+  of leaving the node in `pending` until the token's TTL runs out.
   `tunnel` is advertised only after the hub reports `up` and frpc is still running. Disabling
   the tunnel (`CRAFTPILOT_TUNNEL=disabled`, or the panel switch) stops frpc and removes its
   config, so the hub ports are released instead of being held by a stale client.
