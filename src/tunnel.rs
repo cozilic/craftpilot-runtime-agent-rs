@@ -12,8 +12,22 @@ use tracing::{debug, info, warn};
 use crate::api::MasterClient;
 use crate::config::TunnelSettings;
 use crate::error::{AgentError, Result};
-use crate::model::NodeCapabilities;
 use crate::state::StateStore;
+
+/// Agentförmågan för tunnelklienten. `tunnel` säger att klienten finns och är
+/// påslagen — mastern äger fortfarande `up`, så panelen visar "ansluter"
+/// medan hubben bekräftar proxyn. `tunnel-disabled` skiljer en avstängd
+/// klient från en agent som inte har någon alls.
+pub const FEATURE_TUNNEL: &str = "tunnel";
+pub const FEATURE_TUNNEL_DISABLED: &str = "tunnel-disabled";
+
+pub fn capability_features(enabled: bool) -> Vec<String> {
+    vec![if enabled {
+        FEATURE_TUNNEL.to_string()
+    } else {
+        FEATURE_TUNNEL_DISABLED.to_string()
+    }]
+}
 
 /// Masterns svar från `GET /api/runtime/nodes/{node}/tunnel`
 /// (docs/RUNTIME-NODE-TUNNEL.md). `token` är bara satt när mastern just
@@ -85,15 +99,15 @@ struct PreparedTunnel {
 /// för att lämna kvar en process som håller nodens portar. Portarna som
 /// frpc registrerar är nodens egna: mastern nekar allt annat i sitt plugin.
 ///
-/// `advertised` är avsiktligt fail-closed: `tunnel` rapporteras först när
-/// hubben själv har svarat `up` på ett senare poll och processen lever. En
-/// död eller nekad frpc ska aldrig visas som en fungerande slutpunkt.
+/// `tunnel`-förmågan säger att klienten finns och är påslagen, inte att
+/// hubben redan accepterat den: mastern äger `up`, och panelen behöver kunna
+/// skilja "ansluter" från "har ingen klient". En död eller nekad frpc syns i
+/// `tunnel_state`/`tunnel_error` i stället för att agenten gissar.
 pub struct TunnelService {
     settings: TunnelSettings,
     child: Option<Child>,
     /// Signatur för konfigurationen som barnprocessen startades med.
     applied: Option<String>,
-    advertised: bool,
     last_refresh: Option<Instant>,
 }
 
@@ -103,26 +117,14 @@ impl TunnelService {
             settings,
             child: None,
             applied: None,
-            advertised: false,
             last_refresh: None,
-        }
-    }
-
-    pub fn capabilities(&self) -> NodeCapabilities {
-        if !self.advertised {
-            return NodeCapabilities::default();
-        }
-
-        NodeCapabilities {
-            features: vec!["tunnel".to_string()],
-            ..NodeCapabilities::default()
         }
     }
 
     /// Hämtar nodens tunneläga och ser till att frpc speglar det.
     ///
-    /// Nätverksanropet görs först: faller det stannar den befintliga
-    /// processen kvar utan att rapporteras som `tunnel`. När mastern säger
+    /// Nätverksanropet görs först: faller det stannar ingen förbindelse kvar
+    /// som ser fungerande ut — `tunnel_state` ägs av mastern. När mastern säger
     /// `enabled: false` stoppas frpc och token/konfiguration tas bort, så
     /// nodens portar lämnas tillbaka till hubben.
     pub async fn refresh(
@@ -150,7 +152,7 @@ impl TunnelService {
             self.applied = None;
         }
         if self.child.is_none() {
-            self.advertised = false;
+            self.applied = None;
         }
 
         let state = match api.tunnel_state(node_id).await {
@@ -161,7 +163,6 @@ impl TunnelService {
                 // håller portar hubben redan har släppt.
                 self.shutdown().await;
                 self.applied = None;
-                self.advertised = false;
                 debug!(error = %err, "tunnel state is unavailable");
                 return Err(err);
             }
@@ -171,7 +172,6 @@ impl TunnelService {
             let had_secrets = self.applied.is_some() || store.state().tunnel_token.is_some();
             self.shutdown().await;
             self.applied = None;
-            self.advertised = false;
             remove_files(&self.settings);
             clear_token(store)?;
             if had_secrets {
@@ -189,7 +189,6 @@ impl TunnelService {
             Err(err) => {
                 self.shutdown().await;
                 self.applied = None;
-                self.advertised = false;
                 return Err(err);
             }
         };
@@ -204,13 +203,11 @@ impl TunnelService {
             && self.child_alive()
         {
             // frpc har redan rätt konfiguration; hubben äger `up`.
-            self.advertised = state.state == "up";
             return Ok(());
         }
 
         self.shutdown().await;
         self.applied = None;
-        self.advertised = false;
 
         ensure_private_dir(&self.settings.dir)?;
         write_private(&self.settings.ca_path(), prepared.ca_pem.as_bytes())?;
@@ -229,7 +226,6 @@ impl TunnelService {
     /// Stoppar frpc utan att röra konfigurationen. Anropas vid avstängning
     /// av agenten; själva portfrigöringen ägs av mastern.
     pub async fn shutdown(&mut self) {
-        self.advertised = false;
         let Some(mut child) = self.child.take() else {
             return;
         };
@@ -254,14 +250,12 @@ impl TunnelService {
                 warn!(code = status.code(), "frpc exited");
                 self.child = None;
                 self.applied = None;
-                self.advertised = false;
                 false
             }
             Err(err) => {
                 warn!(error = %err, "checking frpc failed");
                 self.child = None;
                 self.applied = None;
-                self.advertised = false;
                 false
             }
         }
@@ -746,17 +740,11 @@ mod tests {
     }
 
     #[test]
-    fn caps_are_advertised_only_after_the_hub_is_up() {
-        let mut service = TunnelService::new(settings(
-            std::env::temp_dir().join("craftpilot-agent-test-tunnel-caps"),
-        ));
-        assert!(service.capabilities().features.is_empty());
-
-        service.advertised = true;
-        assert_eq!(service.capabilities().features, vec!["tunnel"]);
-
-        service.advertised = false;
-        assert!(service.capabilities().features.is_empty());
+    fn the_client_is_reported_before_the_hub_is_up() {
+        // `up` ägs av mastern. Förmågan säger bara att klienten finns och är
+        // påslagen, så panelen kan skilja den från en agent utan klient.
+        assert_eq!(capability_features(true), vec![FEATURE_TUNNEL]);
+        assert_eq!(capability_features(false), vec![FEATURE_TUNNEL_DISABLED]);
     }
 
     #[cfg(unix)]
