@@ -719,6 +719,12 @@ fn insert_capabilities(body: &mut Value, capabilities: &NodeCapabilities) {
     if let Some(port) = capabilities.bound_port {
         body["sftp_bound_port"] = serde_json::json!(port);
     }
+    // Agenten har tunnelklienten på men ingen token (2026-11-27). Fältet
+    // skickas bara när det är sant: ett utelämnat fält betyder "inget att
+    // rapportera", så mastern aldrig roterar en token i onödan.
+    if capabilities.tunnel_token_missing {
+        body["tunnel_token_missing"] = serde_json::json!(true);
+    }
 }
 
 /// Masterns felkod för en anmälan som en sysadmin har avvisat. Den ska
@@ -733,4 +739,25 @@ fn request_error(status: u16, body: String) -> AgentError {
     }
 
     AgentError::Rejected { status, body }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_missing_tunnel_token_is_reported_only_when_it_is_true() {
+        let mut healthy = serde_json::json!({"sequence": 7});
+        insert_capabilities(&mut healthy, &NodeCapabilities::default());
+        assert!(healthy.get("tunnel_token_missing").is_none());
+        assert_eq!(healthy["features"], serde_json::json!([]));
+
+        let missing = NodeCapabilities {
+            tunnel_token_missing: true,
+            ..Default::default()
+        };
+        let mut body = serde_json::json!({"sequence": 8});
+        insert_capabilities(&mut body, &missing);
+        assert_eq!(body["tunnel_token_missing"], serde_json::json!(true));
+    }
 }

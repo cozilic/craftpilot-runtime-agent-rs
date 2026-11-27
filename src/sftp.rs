@@ -228,6 +228,9 @@ impl SftpService {
             features: vec!["sftp".to_string(), "sftp-password".to_string()],
             fingerprint: self.fingerprint.clone(),
             bound_port: self.bound_port,
+            // SFTPGo kan aldrig svara för tunnelns token; flaggan sätts av
+            // agentens `capabilities()`.
+            tunnel_token_missing: false,
         };
         Ok(())
     }
@@ -912,6 +915,7 @@ mod tests {
             features: vec!["sftp".to_string()],
             fingerprint: Some("SHA256:test".to_string()),
             bound_port: Some(2223),
+            tunnel_token_missing: false,
         };
         assert_eq!(service.capabilities().features, vec!["sftp"]);
         assert_eq!(service.capabilities().bound_port, Some(2223));

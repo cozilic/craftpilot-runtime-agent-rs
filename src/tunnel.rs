@@ -29,6 +29,17 @@ pub fn capability_features(enabled: bool) -> Vec<String> {
     }]
 }
 
+/// Sant när mastern vill ha en tunnel men agenten inte har någon token att
+/// använda — det enda läget som rapporteras som `tunnel_token_missing`.
+///
+/// En avstängd tunnel, en token som mastern just skickat i svaret och en
+/// sparad token i state är alla friska lägen: ingen av dem ska få mastern att
+/// rotera. Utan den här gränsen skulle en ny token utfärdas varje poll i ett
+/// läge där felet ligger någon annanstans (t.ex. CA:t).
+pub fn missing_token(state: &TunnelState, stored_token: Option<&str>) -> bool {
+    state.enabled && state.token.is_none() && stored_token.is_none()
+}
+
 /// Masterns svar från `GET /api/runtime/nodes/{node}/tunnel`
 /// (docs/RUNTIME-NODE-TUNNEL.md). `token` är bara satt när mastern just
 /// utfärdat en ny token; annars ligger den kvar i agentens state.
@@ -109,6 +120,11 @@ pub struct TunnelService {
     /// Signatur för konfigurationen som barnprocessen startades med.
     applied: Option<String>,
     last_refresh: Option<Instant>,
+    /// Mastern vill ha en tunnel men agenten har ingen token att använda
+    /// (state-katalogen är borta, eller token sparades aldrig). Rapporteras i
+    /// heartbeat/claim så mastern kan rotera i stället för att noden väntar
+    /// ut TTL:en.
+    token_missing: bool,
 }
 
 impl TunnelService {
@@ -118,7 +134,15 @@ impl TunnelService {
             child: None,
             applied: None,
             last_refresh: None,
+            token_missing: false,
         }
+    }
+
+    /// Mastern vill ha en tunnel men agenten har ingen token. Läggs i
+    /// förmågorna av `Agent::capabilities()`, så hjärtat/claimen kan be
+    /// mastern utfärda en ny.
+    pub fn token_missing(&self) -> bool {
+        self.token_missing
     }
 
     /// Hämtar nodens tunneläga och ser till att frpc speglar det.
@@ -137,6 +161,7 @@ impl TunnelService {
             self.shutdown().await;
             remove_files(&self.settings);
             clear_token(store)?;
+            self.token_missing = false;
             return Ok(());
         }
 
@@ -177,6 +202,9 @@ impl TunnelService {
             if had_secrets {
                 info!("tunnel is off: stopped frpc and removed its config");
             }
+            // Mastern vill ingen tunnel: ingen token behövs, alltså inget att
+            // rapportera.
+            self.token_missing = false;
             return Ok(());
         }
 
@@ -185,8 +213,16 @@ impl TunnelService {
             &self.settings,
             store.state().tunnel_token.as_deref(),
         ) {
-            Ok(prepared) => prepared,
+            Ok(prepared) => {
+                // Klienten kan bygga sin konfiguration: ingen token saknas.
+                self.token_missing = false;
+                prepared
+            }
             Err(err) => {
+                // Bara när mastern vill ha en tunnel och agenten varken fick
+                // en ny token i svaret eller har en sparad: det är läget
+                // mastern kan lösa genom att rotera (2026-11-27).
+                self.token_missing = missing_token(&state, store.state().tunnel_token.as_deref());
                 self.shutdown().await;
                 self.applied = None;
                 return Err(err);
@@ -745,6 +781,35 @@ mod tests {
         // påslagen, så panelen kan skilja den från en agent utan klient.
         assert_eq!(capability_features(true), vec![FEATURE_TUNNEL]);
         assert_eq!(capability_features(false), vec![FEATURE_TUNNEL_DISABLED]);
+    }
+
+    #[test]
+    fn a_client_without_a_token_asks_the_master_for_one() {
+        let stored = "b".repeat(64);
+
+        // Ingen token i svaret och ingen sparad: bara mastern kan lösa det.
+        let mut without_token = state();
+        without_token.token = None;
+        assert!(missing_token(&without_token, None));
+
+        // En sparad token duger — den återanvänds när mastern svarar `null`.
+        assert!(!missing_token(&without_token, Some(&stored)));
+
+        // En ny token i svaret är alltid nog, och en avstängd tunnel behöver
+        // ingen token alls.
+        assert!(!missing_token(&state(), None));
+        let mut disabled = state();
+        disabled.enabled = false;
+        disabled.token = None;
+        assert!(!missing_token(&disabled, None));
+    }
+
+    #[test]
+    fn a_stopped_client_does_not_report_a_missing_token() {
+        let service = TunnelService::new(settings(
+            std::env::temp_dir().join("craftpilot-agent-test-tunnel-missing"),
+        ));
+        assert!(!service.token_missing());
     }
 
     #[cfg(unix)]
