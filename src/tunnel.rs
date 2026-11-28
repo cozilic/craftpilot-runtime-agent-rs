@@ -58,6 +58,12 @@ pub struct TunnelState {
     pub ca_pem: Option<String>,
     #[serde(default)]
     pub ca_sha256: Option<String>,
+    /// Nodens bandbreddstak i KB/s (2026-11-28). Mastern äger värdet; noll
+    /// eller tomt betyder inget tak. Taket skrivs som `transport.bandwidthLimit`
+    /// på varje proxy, så en nod aldrig kan ta mer än sin andel av masterns
+    /// upplänk.
+    #[serde(default)]
+    pub bandwidth_limit_kbps: Option<u32>,
     #[serde(default)]
     pub proxies: Vec<TunnelProxy>,
 }
@@ -406,12 +412,14 @@ fn prepare(
 
     validate_token(&token)?;
     validate_user(&state.user)?;
+    validate_bandwidth_limit(state.bandwidth_limit_kbps)?;
 
     let config = render_config(
         hub,
         &state.user,
         &token,
         &state.proxies,
+        state.bandwidth_limit_kbps,
         &settings.local_host,
         &settings.ca_path(),
     )?;
@@ -461,6 +469,7 @@ fn render_config(
     user: &str,
     token: &str,
     proxies: &[TunnelProxy],
+    bandwidth_limit_kbps: Option<u32>,
     local_host: &str,
     ca_path: &Path,
 ) -> Result<String> {
@@ -527,7 +536,19 @@ fn render_config(
         config.push_str("type = \"tcp\"\n");
         config.push_str(&format!("localIP = {}\n", toml_string(local_host)));
         config.push_str(&format!("localPort = {}\n", proxy.local_port));
-        config.push_str(&format!("remotePort = {}\n\n", proxy.remote_port));
+        config.push_str(&format!("remotePort = {}\n", proxy.remote_port));
+
+        // Bandbreddstaket (2026-11-28) ligger på varje proxy i frp — det finns
+        // ingen klientövergripande gräns — så samma tak skrivs på nodens alla
+        // proxies. frp:s enhet är KB/s, vilket är det mastern räknar i.
+        if let Some(kbps) = bandwidth_limit_kbps {
+            config.push_str(&format!(
+                "transport.bandwidthLimit = {}\n",
+                toml_string(&format!("{kbps}KB"))
+            ));
+        }
+
+        config.push('\n');
     }
 
     Ok(config)
@@ -538,6 +559,20 @@ fn validate_token(token: &str) -> Result<()> {
         return Err(AgentError::Runtime(
             "the master sent an invalid tunnel token".into(),
         ));
+    }
+    Ok(())
+}
+
+/// Taket mastern skickar (KB/s). Noll betyder "inget tak" och utelämnas
+/// redan av mastern; ett noll eller orimligt värde här är ett fel i
+/// kontraktet, inte något att gissa runt.
+fn validate_bandwidth_limit(kbps: Option<u32>) -> Result<()> {
+    if let Some(kbps) = kbps {
+        if kbps == 0 || kbps > 1_048_576 {
+            return Err(AgentError::Runtime(
+                "the master sent an invalid tunnel bandwidth limit".into(),
+            ));
+        }
     }
     Ok(())
 }
@@ -711,6 +746,52 @@ mod tests {
         assert!(config.contains("localIP = \"host.docker.internal\""));
         assert!(config.contains("remotePort = 30001"));
         assert!(config.contains("[[proxies]]\nname = \"sftp\""));
+    }
+
+    #[test]
+    fn renders_the_bandwidth_limit_on_every_proxy() {
+        let dir = std::env::temp_dir().join("craftpilot-agent-test-tunnel-bandwidth");
+        let mut limited = state();
+        limited.bandwidth_limit_kbps = Some(1250);
+
+        let config = prepare(&limited, &settings(dir), None).unwrap().config;
+
+        assert_eq!(
+            config.matches("transport.bandwidthLimit = \"1250KB\"").count(),
+            2,
+            "taket ska gälla nodens båda proxies: {config}"
+        );
+    }
+
+    #[test]
+    fn a_tunnel_without_a_limit_has_no_bandwidth_key() {
+        let dir = std::env::temp_dir().join("craftpilot-agent-test-tunnel-no-bandwidth");
+        let config = prepare(&state(), &settings(dir), None).unwrap().config;
+
+        assert!(!config.contains("bandwidthLimit"));
+    }
+
+    #[test]
+    fn rejects_an_invalid_bandwidth_limit() {
+        let dir = std::env::temp_dir().join("craftpilot-agent-test-tunnel-bad-bandwidth");
+
+        for kbps in [0, 1_048_577] {
+            let mut broken = state();
+            broken.bandwidth_limit_kbps = Some(kbps);
+            assert!(prepare(&broken, &settings(dir.clone()), None).is_err());
+        }
+    }
+
+    #[test]
+    fn a_changed_bandwidth_limit_changes_the_signature() {
+        let dir = std::env::temp_dir().join("craftpilot-agent-test-tunnel-bandwidth-signature");
+        let first = prepare(&state(), &settings(dir.clone()), None).unwrap();
+
+        let mut limited = state();
+        limited.bandwidth_limit_kbps = Some(2000);
+        let second = prepare(&limited, &settings(dir), None).unwrap();
+
+        assert_ne!(first.signature, second.signature);
     }
 
     #[test]
