@@ -757,7 +757,9 @@ mod tests {
         let config = prepare(&limited, &settings(dir), None).unwrap().config;
 
         assert_eq!(
-            config.matches("transport.bandwidthLimit = \"1250KB\"").count(),
+            config
+                .matches("transport.bandwidthLimit = \"1250KB\"")
+                .count(),
             2,
             "taket ska gälla nodens båda proxies: {config}"
         );
